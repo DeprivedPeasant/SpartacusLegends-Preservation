@@ -1,0 +1,17 @@
+Version: 1.2
+
+PPU-81471d050c14f4d20b4027686f8b571dafd32394:
+
+  "Spartacus Legends - Server emulator compatibility":
+    Games:
+      "Spartacus Legends":
+        NPUB30746: [ 01.00 ]
+    Author: "Spartacus Legends preservation project"
+    Notes: >
+      Use with the local preservation server. Accepts the fully initialized
+      backend state produced by the replacement Quazal services. Ticket
+      validation remains original and must not be bypassed because it also
+      decrypts the secure-session key and ticket.
+    Patch Version: "1.0"
+    Patch:
+      - [ be32, 0x001a01e4, 0x68630019 ]

@@ -1,0 +1,29 @@
+# Keep the public repository limited to the preservation server source and
+# release recipe. Reverse-engineering workspaces, game-derived data, logs,
+# downloaded reference projects, and generated binaries remain local.
+*
+
+!.gitignore
+!README.md
+
+!packaging/
+packaging/*
+!packaging/build_release.ps1
+!packaging/requirements-build.txt
+!packaging/SpartacusLegends_ServerPatch.yml
+
+!patches/
+patches/*
+!patches/SpartacusLegends_OfflineFix.yml
+
+!tools/
+tools/*
+!tools/prudp_server.py
+!tools/spartacus_server.py
+!tools/UbiOnlineConfigService/
+tools/UbiOnlineConfigService/*
+!tools/UbiOnlineConfigService/__init__.py
+!tools/UbiOnlineConfigService/spartacus_onlineconfig.py
+
+**/__pycache__/
+*.py[cod]
