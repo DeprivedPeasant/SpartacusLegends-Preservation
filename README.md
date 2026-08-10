@@ -64,11 +64,6 @@ three listeners down cleanly.
 If startup says a port is unavailable, close the older server instance or
 other program using that port. Only one preservation server should run.
 
-If login sends a 52-byte secure CONNECT and fails immediately, an obsolete
-ticket-validator patch is still active or cached. Disable any patch that
-writes `0x00448D98`, enable only the supplied compatibility patch, clear the
-PPU cache, and cold-boot again. A healthy secure CONNECT is 88 bytes.
-
 If RPCS3 shows the service-unavailable dialog, verify the IP swap spelling,
 that the server reported all services ready, and that the compatibility patch
 is enabled for NPUB30746 version 01.00.
