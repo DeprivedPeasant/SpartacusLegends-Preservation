@@ -29,10 +29,14 @@ No game files or decrypted executable content are included.
    - Restart RPCS3, open **Manage > Game Patches**, enable
      **Spartacus Legends - Server emulator compatibility** for NPUB30746
      01.00, and click **Save**.
-3. Right-click the game and open its custom configuration. Under Network, set
-   the IP swap list to:
+3. Right-click the game and open its custom configuration. Under **Network**,
+   set:
 
-   `onlineconfigservice.ubi.com=127.0.0.1`
+   - **Network Status:** Connected
+   - **PSN Status:** RPCN
+   - **IP swap list:**
+
+     `onlineconfigservice.ubi.com=127.0.0.1`
 
 4. After installing or changing the patch, right-click the game and choose
    **Remove > PPU Cache** once. This prevents RPCS3 from reusing LLVM code
