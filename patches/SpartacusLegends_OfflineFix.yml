@@ -6,38 +6,27 @@ PPU-81471d050c14f4d20b4027686f8b571dafd32394:
     Games:
       "Spartacus Legends":
         NPUB30746: [ 01.00 ]
-    Author: "community RE (Ghidra + RPCS3 live debugging)"
+    Author: "Spartacus Legends preservation project"
     Notes: >
-      Use with the local Spartacus Legends server emulator. The server
-      produces a valid Quazal kerberos ticket, so the original ticket
-      validator remains intact to decrypt the session key and secure-ticket
-      blob into the caller's output buffer.
-
-      The only executable change makes the outer online-flow completion gate
-      accept backend state 0x19, which is reached after the full secure/title
-      startup, instead of waiting forever for retail-only state 0x1a.
-
-      Do not replace this function with `li r3,1; blr`: validation has a
-      required decryption side effect. Returning at entry leaves the session
-      key and secure ticket uninitialised, producing a 52-byte CONNECT with a
-      zero-length ticket instead of the valid 88-byte CONNECT.
-
-      Original gate bytes: 0x001a01e4 6863001A (xori r3,r3,0x1a)
-    Patch Version: "3.0"
+      REQUIRED. Use with the local preservation server. Works around RPCS3's
+      incomplete Commerce2 product-info result so the original backend state
+      machine reaches state 26, then restores the complete locally serialized
+      profile when the retired retail profile service is unavailable.
+    Patch Version: "2.0"
     Patch:
-      - [ be32, 0x001a01e4, 0x68630019 ]  # accept completed local-server state
+      - [ be32, 0x004F2B64, 0x48000458 ] # enter the game's state-26 success path
+      - [ be32, 0x00068504, 0x480000BC ] # apply the locally saved profile
 
-  "Spartacus Legends - Skip REMOTESERVERFAIL dialog":
+  "Spartacus Legends - One-hit fight debug cheat (optional)":
     Games:
       "Spartacus Legends":
         NPUB30746: [ 01.00 ]
-    Author: "community RE (Ghidra + RPCS3 live debugging)"
+    Author: "Spartacus Legends preservation project"
     Notes: >
-      Superseded by the server-emulator approach - leave DISABLED unless
-      running without tools/prudp_server.py. NOPs the dialog call at
-      0x004f3638 so the "service is not available" popup is skipped. This
-      only suppresses the message; the game still reaches the title screen
-      and loops rather than entering the game.
-    Patch Version: "2.0"
+      OPTIONAL DEBUG CHEAT. Leave disabled for normal play. Makes the player
+      invulnerable and defeats an offline opponent with the first damaging hit.
+      Intended only to shorten repeated progression and autosave tests.
+    Patch Version: "1.0-debug"
     Patch:
-      - [ be32, 0x004f3638, 0x60000000 ]  # bl 0x0014a818 (show dialog) -> nop
+      - [ be32, 0x00054B24, 0x38000001 ] # fighter slot 0 invulnerable
+      - [ be32, 0x00054B60, 0x38000001 ] # one-hit damage against slot 1

@@ -14,7 +14,7 @@ import time
 import traceback
 
 
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 DEFAULT_HTTP_PORT = 80
 DEFAULT_AUTH_PORT = 21000
 DEFAULT_SECURE_PORT = 21001
@@ -38,6 +38,7 @@ def configure_environment(log_dir: Path, secure_port: int) -> None:
         "P31M13": "zero",
         "P29M12": "echo_list",
         "PUSH_NOTIFICATION": "0",
+        "SPARTACUS_PROFILE": str(application_dir() / "data" / "profile.json"),
         "SPARTACUS_PRUDP_LOG": str(log_dir / "prudp.log"),
         "SPARTACUS_CONFIG_LOG": str(log_dir / "online_config.log"),
     }
