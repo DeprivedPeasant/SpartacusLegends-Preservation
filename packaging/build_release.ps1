@@ -5,7 +5,7 @@ $BuildRoot = Join-Path $ProjectRoot '.build'
 $VenvRoot = Join-Path $BuildRoot 'venv'
 $VenvPython = Join-Path $VenvRoot 'Scripts\python.exe'
 $DistRoot = Join-Path $ProjectRoot 'dist'
-$PackageRoot = Join-Path $DistRoot 'SpartacusLegends-Preservation-v0.1.0'
+$PackageRoot = Join-Path $DistRoot 'SpartacusLegends-Preservation-v0.2.0'
 
 New-Item -ItemType Directory -Force -Path $BuildRoot,$DistRoot,$PackageRoot | Out-Null
 
@@ -32,6 +32,6 @@ Copy-Item -Force -LiteralPath (Join-Path $DistRoot 'SpartacusLegendsServer.exe')
 Copy-Item -Force -LiteralPath (Join-Path $PSScriptRoot 'SpartacusLegends_ServerPatch.yml') -Destination $PackageRoot
 Copy-Item -Force -LiteralPath (Join-Path $ProjectRoot 'README.md') -Destination $PackageRoot
 
-$ZipPath = Join-Path $DistRoot 'SpartacusLegends-Preservation-v0.1.0.zip'
+$ZipPath = Join-Path $DistRoot 'SpartacusLegends-Preservation-v0.2.0.zip'
 Compress-Archive -Force -Path (Join-Path $PackageRoot '*') -DestinationPath $ZipPath
 Write-Host "Release created: $ZipPath"
