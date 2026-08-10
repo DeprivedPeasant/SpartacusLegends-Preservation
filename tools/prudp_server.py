@@ -33,6 +33,7 @@ import datetime
 import time
 import os
 import threading
+import json
 
 PORT = 21000
 
@@ -91,13 +92,19 @@ GENERIC_BODIES = {
     "result": struct.pack("<I", 0x00010001),        # bare qResult success
     "result_zero": struct.pack("<II", 0x00010001, 0),   # qResult + empty list
     "zero_zero": struct.pack("<II", 0, 0),          # two empty counts
+    # Two primitive u32 output parameters. Monetization(102) method 6 uses
+    # this response shape; values are supplied by P<proto>M<method>_0/_1.
+    "u32_pair": None,
+    # Monetization(102) purchase result: updated gold/silver followed by the
+    # 16-byte transaction object decoded as {u32, u64, u32}.
+    "monetization_purchase": None,
     # Not a fixed body: mirror the request's own (u32 count, count x u32) list
     # back. Built per-request, see ECHO_LIST handling below.
     "echo_list": None,
-    # UserStorage(53) m1: one fabricated content entry. Element decode at
-    # 0x00490358 reads u32 then u64; the caller then reads one more u32,
-    # so an entry is 16 bytes. Built per-request, see us_entry below.
-    "us_entry": None,
+    # UserStorage(53) m1 SearchContents response. The DDL and decoder agree on
+    # qlist<UserContent>, where UserContent is UserContentKey(u32 typeID,
+    # u64 contentID), u32 pid, qlist<ContentProperty>. Built per request.
+    "user_content_stub": None,
 }
 
 # Per-(protocol, method) overrides so a single service can be varied while
@@ -147,8 +154,111 @@ FLAG_NAMES = {1: "ACK", 2: "RELIABLE", 4: "NEED_ACK", 8: "HAS_SIZE", 16: "UNKNOW
 PROTO_AUTHENTICATION = 0x0A
 PROTO_SECURE = 0x0B          # SecureConnectionProtocol
 PROTO_NOTIFICATION = 0x0E    # GlobalNotificationEventProtocol (live-confirmed)
+PROTO_MONETIZATION = 102
 PROTO_NAMES = {0x0A: "TicketGranting", 0x0B: "SecureConnection",
-               0x0E: "GlobalNotificationEvent"}
+               0x0E: "GlobalNotificationEvent", 102: "Monetization"}
+
+
+class EconomyStore:
+    """Small atomic JSON store for the title's server-side economy."""
+
+    def __init__(self, path):
+        self.path = os.path.abspath(path)
+        self.lock = threading.RLock()
+        # Confirmed clean post-tutorial economy. Existing JSON profiles always
+        # override these values, so upgrades preserve their current balances.
+        self.data = {"version": 1, "gold": 0, "silver": 200, "owned_items": []}
+        self._load()
+
+    def _load(self):
+        try:
+            with open(self.path, "r", encoding="utf-8") as f:
+                loaded = json.load(f)
+            self.data["gold"] = max(0, int(loaded.get("gold", 0)))
+            self.data["silver"] = max(0, int(loaded.get("silver", 0)))
+            self.data["owned_items"] = sorted({
+                int(item) & 0xFFFFFFFF
+                for item in loaded.get("owned_items", [])
+            })
+        except FileNotFoundError:
+            pass
+        except (OSError, ValueError, TypeError, json.JSONDecodeError) as error:
+            log(f"WARNING: could not load economy profile {self.path}: {error}")
+
+    def _save(self):
+        directory = os.path.dirname(self.path)
+        os.makedirs(directory, exist_ok=True)
+        temporary = self.path + ".tmp"
+        with open(temporary, "w", encoding="utf-8", newline="\n") as f:
+            json.dump(self.data, f, indent=2, sort_keys=True)
+            f.write("\n")
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(temporary, self.path)
+
+    def add_income(self, gold_delta, silver_delta):
+        with self.lock:
+            self.data["gold"] = max(0, self.data["gold"] + gold_delta)
+            self.data["silver"] = max(0, self.data["silver"] + silver_delta)
+            self._save()
+            return self.data["gold"], self.data["silver"]
+
+    def purchase(self, item_id, gold_cost, silver_cost):
+        with self.lock:
+            owned = set(self.data["owned_items"])
+            if item_id not in owned:
+                if gold_cost >= 0:
+                    self.data["gold"] = max(0, self.data["gold"] - gold_cost)
+                if silver_cost >= 0:
+                    self.data["silver"] = max(0, self.data["silver"] - silver_cost)
+                owned.add(item_id)
+                self.data["owned_items"] = sorted(owned)
+                self._save()
+            return self.data["gold"], self.data["silver"]
+
+    def requested_owned_items(self, requested):
+        with self.lock:
+            owned = set(self.data["owned_items"])
+            return [item for item in requested if item in owned]
+
+
+INVENTORY_PROBE = os.environ.get(
+    "SPARTACUS_INVENTORY_PROBE", ""
+) not in ("", "0")
+
+# Diagnostic-only Method 3 records for three known-owned weapons.  Keeping
+# the price/count fields at zero isolates the two boolean fields and their
+# possible interaction in a single cold boot.
+INVENTORY_PROBE_FIELDS = {
+    10236: (0, True,  0, 0, False, 0, 0),  # boolean field 4 only
+    10250: (0, False, 0, 0, True,  0, 0),  # boolean field 7 only
+    10265: (0, True,  0, 0, True,  0, 0),  # both boolean fields
+}
+
+
+def inventory_item_fields(item_id):
+    if INVENTORY_PROBE and item_id in INVENTORY_PROBE_FIELDS:
+        return INVENTORY_PROBE_FIELDS[item_id]
+    return (0, False, 0, 0, False, 1, 0)
+
+
+def encode_inventory_item(item_id):
+    """Encode the 9 fields read by Monetization method 3's item decoder."""
+    return (struct.pack("<I", item_id)
+            + struct.pack("<H", 1) + b"\x00"  # empty Quazal string
+            # The third field is rendered by the shop as a gold price when
+            # its following flag is true; our former (1, true) placeholder
+            # therefore changed owned items to "1 gold".  GetPurchasedItems
+            # carries field 8 forward as part of the client inventory state,
+            # making it the best-supported quantity/ownership candidate.
+            + struct.pack("<I?II?II", *inventory_item_fields(item_id)))
+
+
+def encode_inventory(items):
+    return struct.pack("<I", len(items)) + b"".join(
+        encode_inventory_item(item) for item in items
+    )
+
 
 LOG_PATH = os.environ.get(
     "SPARTACUS_PRUDP_LOG",
@@ -167,6 +277,13 @@ def log(msg):
         print(line, flush=True)
         with open(LOG_PATH, "a", encoding="utf-8", errors="replace") as f:
             f.write(line + "\n")
+
+
+ECONOMY = EconomyStore(os.environ.get(
+    "SPARTACUS_PROFILE",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                 "..", "data", "profile.json"),
+))
 
 
 # ---------------------------------------------------------------- crypto
@@ -731,6 +848,65 @@ def main(port=None, stop_event=None, ready_event=None, host="0.0.0.0"):
                             source_pid, target_pid)
                         label = "REQUEST_TICKET"
 
+                elif rmc and rmc["is_request"] \
+                        and rmc["protocol"] == PROTO_MONETIZATION:
+                    if rmc["method_id"] == 3:       # RequestInventory
+                        try:
+                            count = struct.unpack_from("<I", rmc["params"], 0)[0]
+                            requested = list(struct.unpack_from(
+                                f"<{count}I", rmc["params"], 4
+                            )) if count else []
+                        except struct.error:
+                            requested = []
+                        owned = ECONOMY.requested_owned_items(requested)
+                        resp_body = encode_inventory(owned)
+                        label = "MONETIZATION_INVENTORY"
+                        log(f"   *** Inventory requested={requested} owned={owned} ***")
+                        if INVENTORY_PROBE:
+                            probed = {
+                                item: inventory_item_fields(item)
+                                for item in owned
+                                if item in INVENTORY_PROBE_FIELDS
+                            }
+                            if probed:
+                                log(f"   *** Method 3 probe fields={probed} ***")
+                    elif rmc["method_id"] == 6:     # Deposit income
+                        try:
+                            gold_delta, silver_delta = struct.unpack_from(
+                                "<ii", rmc["params"], 0)
+                        except struct.error:
+                            gold_delta = silver_delta = 0
+                        gold, silver = ECONOMY.add_income(
+                            gold_delta, silver_delta
+                        )
+                        resp_body = struct.pack("<II", gold, silver)
+                        label = "MONETIZATION_INCOME"
+                        log(f"   *** Income gold={gold_delta:+d} "
+                            f"silver={silver_delta:+d} -> balances "
+                            f"gold={gold} silver={silver} ***")
+                    elif rmc["method_id"] == 7:     # Purchase item
+                        try:
+                            item_id, gold_cost, silver_cost = struct.unpack_from(
+                                "<Iii", rmc["params"], 0
+                            )
+                        except struct.error:
+                            item_id, gold_cost, silver_cost = 0, -1, -1
+                        gold, silver = ECONOMY.purchase(
+                            item_id, gold_cost, silver_cost
+                        )
+                        # The final three fields form the purchased-item receipt:
+                        # item id, an eight-byte transaction/time value, and the
+                        # resulting quantity.  Returning an all-zero placeholder
+                        # let the call complete but gave the client no item to
+                        # add to its live inventory.
+                        resp_body = struct.pack(
+                            "<IIIQI", gold, silver, item_id, 0, 1
+                        )
+                        label = "MONETIZATION_PURCHASE"
+                        log(f"   *** Purchase item={item_id} gold_cost={gold_cost} "
+                            f"silver_cost={silver_cost} -> balances "
+                            f"gold={gold} silver={silver} ***")
+
                 elif rmc and rmc["is_request"] and GENERIC_ACK:
                     # Probe for protocols we haven't reversed yet. Every
                     # response we DO know the shape of (Login, RequestTicket,
@@ -743,19 +919,31 @@ def main(port=None, stop_event=None, ready_event=None, host="0.0.0.0"):
                     #   GENERIC_BODY=result -> send u32 0x00010001 (default)
                     key = (rmc["protocol"], rmc["method_id"])
                     shape = PROTO_OVERRIDES.get(key, GENERIC_BODY)
-                    if shape == "us_entry":
-                        # count 1, then {u32 id, u64, u32}. Seed the id from
-                        # the request's first field (0x80000004) so we answer
-                        # about the container the client actually asked for.
+                    if shape == "user_content_stub":
+                        # SearchContents(UserStorageQuery) returns a
+                        # qlist<UserContent>. One metadata record with an
+                        # empty property list is structurally complete and
+                        # should cause the title to request the content body.
                         try:
-                            first = struct.unpack_from("<I", rmc["params"], 0)[0]
+                            type_id = struct.unpack_from(
+                                "<I", rmc["params"], 0
+                            )[0]
                         except struct.error:
-                            first = 0
-                        resp_body = (struct.pack("<I", 1)
-                                     + struct.pack("<I", first)
-                                     + struct.pack("<Q", 0)
-                                     + struct.pack("<I", 0))
-                        shape = f"us_entry(id=0x{first:08x})"
+                            type_id = 0x80000004
+                        content_id = int(os.environ.get(
+                            "SPARTACUS_USER_CONTENT_ID", "1"
+                        ), 0)
+                        owner_pid = int(os.environ.get(
+                            "SPARTACUS_USER_CONTENT_PID", str(USER_PID)
+                        ), 0)
+                        resp_body = struct.pack(
+                            "<IIQII", 1, type_id, content_id,
+                            owner_pid, 0
+                        )
+                        shape = ("user_content_stub["
+                                 f"type=0x{type_id:08x}, "
+                                 f"content={content_id}, "
+                                 f"pid=0x{owner_pid:08x}, properties=0]")
                     elif shape == "echo_list":
                         # e.g. UbiAccountManagement(29) m12: the request is
                         # (u32 count, count x u32 pid) and the response decoder
@@ -772,6 +960,26 @@ def main(port=None, stop_event=None, ready_event=None, host="0.0.0.0"):
                         resp_body = struct.pack(f"<I{len(ids)}I",
                                                 len(ids), *ids)
                         shape = f"echo_list{ids}"
+                    elif shape == "u32_pair":
+                        prefix = f"P{rmc['protocol']}M{rmc['method_id']}"
+                        first = int(os.environ.get(prefix + "_0", "0"), 0)
+                        second = int(os.environ.get(prefix + "_1", "0"), 0)
+                        resp_body = struct.pack("<II", first, second)
+                        shape = f"u32_pair[{first}, {second}]"
+                    elif shape == "monetization_purchase":
+                        prefix = f"P{rmc['protocol']}M{rmc['method_id']}"
+                        gold = int(os.environ.get(prefix + "_0", "0"), 0)
+                        silver = int(os.environ.get(prefix + "_1", "0"), 0)
+                        record_id = int(os.environ.get(prefix + "_ID", "0"), 0)
+                        record_value = int(os.environ.get(prefix + "_VALUE", "0"), 0)
+                        record_state = int(os.environ.get(prefix + "_STATE", "0"), 0)
+                        resp_body = struct.pack(
+                            "<IIIQI", gold, silver, record_id,
+                            record_value, record_state
+                        )
+                        shape = (f"monetization_purchase[gold={gold}, "
+                                 f"silver={silver}, id={record_id}, "
+                                 f"value={record_value}, state={record_state}]")
                     else:
                         resp_body = GENERIC_BODIES.get(shape,
                                                        GENERIC_BODIES["empty"])
