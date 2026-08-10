@@ -1,10 +1,11 @@
-Known Issue: Currently unlocks of money and items is not implemented (they were stored server side), this makes progressing a little difficult at the moment.
-
 # Spartacus Legends preservation server
 
 This project restores the login/bootstrap path for the PS3 version of
 Spartacus Legends using a local OnlineConfig and Quazal RendezVous server.
-Once bootstrap completes, the preserved single-player game runs locally.
+Once bootstrap completes, the preserved single-player game runs locally. The
+server reimplements the retired economy and inventory calls, while the patch
+restores locally saved fame, currency, levels, purchases, and fight progress
+across cold boots.
 
 Tested configuration:
 
@@ -30,7 +31,8 @@ No game files or decrypted executable content are included.
      file into the existing file beneath its single `Version: 1.2` header.
    - Restart RPCS3, open **Manage > Game Patches**, enable
      **Spartacus Legends - Server emulator compatibility** for NPUB30746
-     01.00, and click **Save**.
+     01.00, and click **Save**. The separately listed **One-hit fight debug
+     cheat (optional)** should remain disabled for normal play.
 3. Right-click the game and open its custom configuration. Under **Network**,
    set:
 
@@ -45,6 +47,17 @@ No game files or decrypted executable content are included.
    compiled from an older patch.
 5. Cold-boot the game and log in normally. The game should display **Saving**
    and continue to the main menu.
+
+## Saves and optional debug cheat
+
+The server stores its economy profile in `data\profile.json` beside the
+executable. The game continues to write its normal RPCS3 save data. Back up
+both when moving an established profile to another PC.
+
+For rapid testing, **Spartacus Legends - One-hit fight debug cheat (optional)**
+can be enabled in RPCS3's patch manager. It makes the player invulnerable and
+ends offline fights with the first damaging hit. Disable it for normal play;
+after changing its state, remove the game's PPU cache and cold-boot once.
 
 This follows the RPCS3 Wiki's
 [Manually adding custom patches](https://wiki.rpcs3.net/index.php?title=Help:Game_Patches#Manually_adding_custom_patches)
@@ -85,4 +98,4 @@ To build the standalone Windows release:
 powershell -ExecutionPolicy Bypass -File packaging\build_release.ps1
 ```
 
-The build script creates `dist\SpartacusLegends-Preservation-v0.1.0.zip`.
+The build script creates `dist\SpartacusLegends-Preservation-v0.2.0.zip`.

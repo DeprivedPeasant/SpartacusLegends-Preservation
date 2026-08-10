@@ -8,10 +8,25 @@ PPU-81471d050c14f4d20b4027686f8b571dafd32394:
         NPUB30746: [ 01.00 ]
     Author: "Spartacus Legends preservation project"
     Notes: >
-      Use with the local preservation server. Accepts the fully initialized
-      backend state produced by the replacement Quazal services. Ticket
-      validation remains original and must not be bypassed because it also
-      decrypts the secure-session key and ticket.
-    Patch Version: "1.0"
+      REQUIRED. Use with the local preservation server. Works around RPCS3's
+      incomplete Commerce2 product-info result so the original backend state
+      machine reaches state 26, then restores the complete locally serialized
+      profile when the retired retail profile service is unavailable.
+    Patch Version: "2.0"
     Patch:
-      - [ be32, 0x001a01e4, 0x68630019 ]
+      - [ be32, 0x004F2B64, 0x48000458 ] # enter the game's state-26 success path
+      - [ be32, 0x00068504, 0x480000BC ] # apply the locally saved profile
+
+  "Spartacus Legends - One-hit fight debug cheat (optional)":
+    Games:
+      "Spartacus Legends":
+        NPUB30746: [ 01.00 ]
+    Author: "Spartacus Legends preservation project"
+    Notes: >
+      OPTIONAL DEBUG CHEAT. Leave disabled for normal play. Makes the player
+      invulnerable and defeats an offline opponent with the first damaging hit.
+      Intended only to shorten repeated progression and autosave tests.
+    Patch Version: "1.0-debug"
+    Patch:
+      - [ be32, 0x00054B24, 0x38000001 ] # fighter slot 0 invulnerable
+      - [ be32, 0x00054B60, 0x38000001 ] # one-hit damage against slot 1
