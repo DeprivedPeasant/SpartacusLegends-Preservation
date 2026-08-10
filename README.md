@@ -1,3 +1,5 @@
+WARNING: Whilst this will get you in and playing the game, a lot of things don't currently work. Most pressingly, saving and recruiting gladiators doesn't work. If you quit the game you will lose your current gladiator, though you will keep your money and fame progress.
+
 # Spartacus Legends preservation server
 
 This project restores the login/bootstrap path for the PS3 version of
