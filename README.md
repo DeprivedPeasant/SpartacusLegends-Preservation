@@ -1,3 +1,5 @@
+Known Issue: Currently unlocks of money and items is not implemented (they were stored server side), this makes progressing a little difficult at the moment.
+
 # Spartacus Legends preservation server
 
 This project restores the login/bootstrap path for the PS3 version of
