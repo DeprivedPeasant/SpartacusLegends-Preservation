@@ -23,6 +23,7 @@ class MemoryPine:
             rb.EXPECTED_BACKEND_MANAGER: rb.BACKEND_READY_STATE,
             rb.STORE_COUNT: 6,
             rb.OWNED_COUNT: count,
+            rb.UNLOCKED_SLOT_INDEX: max(2, count) - 1,
         }
         self.memory64 = {}
         self.writes = []
@@ -69,6 +70,8 @@ class RosterBridgeTests(unittest.TestCase):
             self.assertEqual(bridge.store.load(), snapshot)
 
             document = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(document["schema_version"], 2)
+            self.assertEqual(document["unlocked_slots"], 2)
             document["game"]["uuid"] = "wrong-build"
             path.write_text(json.dumps(document), encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "different game build"):
@@ -105,6 +108,10 @@ class RosterBridgeTests(unittest.TestCase):
             bridge.restore_snapshot(target, snapshot)
 
             writes = target.writes
+            self.assertEqual(
+                writes[0], (32, rb.UNLOCKED_SLOT_INDEX, 1)
+            )
+            writes = writes[1:]
             backing_writes = snapshot.count * rb.BACKING_WORDS
             record_writes = snapshot.count * rb.RECORD_WORDS
             self.assertTrue(all(width == 64 for width, _, _ in writes[:backing_writes]))
@@ -129,11 +136,26 @@ class RosterBridgeTests(unittest.TestCase):
                 (rb.EXPECTED_BACKEND_MANAGER, rb.BACKEND_READY_STATE - 1),
                 (rb.STORE_COUNT, 5),
                 (rb.OWNED_COUNT, 0),
+                (rb.UNLOCKED_SLOT_INDEX, 0),
             ):
                 original = pine.memory32[address]
                 pine.memory32[address] = unsafe
                 self.assertFalse(bridge._ready(pine))
                 pine.memory32[address] = original
+
+    def test_schema_one_migrates_capacity_without_hiding_roster(self):
+        pine = MemoryPine(count=3)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "roster.json"
+            bridge = self.bridge(path)
+            document = bridge.read_snapshot(pine).to_dict()
+            document["schema_version"] = 1
+            document.pop("unlocked_slots")
+            path.write_text(json.dumps(document), encoding="utf-8")
+
+            migrated = bridge.store.load()
+            self.assertEqual(migrated.count, 3)
+            self.assertEqual(migrated.unlocked_slots, 3)
 
 
 if __name__ == "__main__":

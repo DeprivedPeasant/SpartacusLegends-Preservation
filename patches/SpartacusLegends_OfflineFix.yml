@@ -14,7 +14,7 @@ PPU-81471d050c14f4d20b4027686f8b571dafd32394:
       profile when the retired retail profile service is unavailable. Also
       finalizes the server-backed recruitment-pool refresh callback, which
       otherwise retries indefinitely after a post-fight refresh.
-    Patch Version: "2.1"
+    Patch Version: "4.0"
     Patch:
       - [ be32, 0x004F2B64, 0x48000458 ] # enter the game's state-26 success path
       - [ be32, 0x00068504, 0x480000BC ] # apply the locally saved profile

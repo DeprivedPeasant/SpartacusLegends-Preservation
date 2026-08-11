@@ -21,7 +21,15 @@ No game files or decrypted executable content are included.
 1. Extract the release ZIP and run `SpartacusLegendsServer.exe`. Leave its
    window open while playing. It should report that TCP 80 and UDP 21000/21001
    are ready.
-2. Install the supplied custom patch using RPCS3's manual-patch procedure:
+2. Run `SpartacusLegendsPatchInstaller.exe` and either drag your RPCS3 folder
+   onto it or paste that folder's path. Confirm when prompted. It updates only
+   the three Spartacus Legends entries in `patches\imported_patch.yml`, keeps
+   unrelated custom patches intact, and creates a timestamped backup first.
+   Then restart RPCS3 and enable **Spartacus Legends - Server emulator
+   compatibility** for NPUB30746 01.00 in **Manage > Game Patches**.
+
+   Manual installation remains available if the updater cannot locate your
+   RPCS3 folder:
 
    - Open `SpartacusLegends_ServerPatch.yml` in a text editor and save a copy
      named exactly `imported_patch.yml` in `<RPCS3 folder>\patches\`. On
@@ -57,10 +65,12 @@ No game files or decrypted executable content are included.
 ## Saves and optional patches
 
 The server stores its economy profile in `data\profile.json` and its complete
-gladiator roster in `data\roster.json` beside the executable. The game
-continues to write its normal RPCS3 save data. Back up all three when moving an
-established profile to another PC. `roster.json` is created automatically
-after the first successful login while RPCS3 IPC is enabled.
+gladiator roster, including purchased Ludus slot capacity, in
+`data\roster.json` beside the executable. The game continues to write its
+normal RPCS3 save data. Back up all three when moving an established profile
+to another PC. `roster.json` is created automatically after the first
+successful login while RPCS3 IPC is enabled. Older schema-1 roster files are
+migrated conservatively so every occupied slot remains available.
 
 For rapid testing, **Spartacus Legends - One-hit fight debug cheat (optional)**
 can be enabled in RPCS3's patch manager. It makes the player invulnerable and

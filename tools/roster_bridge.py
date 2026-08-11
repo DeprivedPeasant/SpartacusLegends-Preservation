@@ -47,6 +47,10 @@ STORE_COUNT = ROSTER_MANAGER + 0x53C0
 OWNED_COUNT = ROSTER_MANAGER + 0x53C4
 OWNED_BASE = ROSTER_MANAGER + 0x820
 OWNED_BACKING_BASE = ROSTER_MANAGER + 0x44C0
+# Section-1 profile field used by the Ludus as the highest unlocked zero-based
+# slot index.  A fresh profile contains 1 (two usable slots); purchasing item
+# 80002 changes it to 2 (three usable slots).
+UNLOCKED_SLOT_INDEX = 0x008FF448
 RECORD_STRIDE = 0x158
 BACKING_STRIDE = 0x40
 RECORD_WORDS = RECORD_STRIDE // 8
@@ -169,12 +173,15 @@ def _parse_words(values, expected, label):
 @dataclass(frozen=True)
 class RosterSnapshot:
     count: int
+    unlocked_slots: int
     records: tuple[tuple[int, ...], ...]
     backings: tuple[tuple[int, ...], ...]
 
     def __post_init__(self):
         if not 1 <= self.count <= MAX_ROSTER:
             raise ValueError("roster count outside supported range")
+        if not max(2, self.count) <= self.unlocked_slots <= MAX_ROSTER:
+            raise ValueError("unlocked slot count outside supported range")
         if len(self.records) != self.count or len(self.backings) != self.count:
             raise ValueError("roster count does not match payload")
         if any(len(record) != RECORD_WORDS for record in self.records):
@@ -184,7 +191,7 @@ class RosterSnapshot:
 
     def to_dict(self):
         return {
-            "schema_version": 1,
+            "schema_version": 2,
             "game": {
                 "title": EXPECTED_TITLE,
                 "serial": EXPECTED_SERIAL,
@@ -197,6 +204,7 @@ class RosterSnapshot:
                 "max_roster": MAX_ROSTER,
             },
             "count": self.count,
+            "unlocked_slots": self.unlocked_slots,
             "records": [_hex_words(record) for record in self.records],
             "backings": [_hex_words(backing) for backing in self.backings],
             "captured_at": _datetime.datetime.now().astimezone().isoformat(),
@@ -204,7 +212,8 @@ class RosterSnapshot:
 
     @classmethod
     def from_dict(cls, data):
-        if int(data.get("schema_version", 0)) != 1:
+        schema_version = int(data.get("schema_version", 0))
+        if schema_version not in (1, 2):
             raise ValueError("unsupported roster schema")
         game = data.get("game", {})
         if (game.get("serial") != EXPECTED_SERIAL or
@@ -216,6 +225,12 @@ class RosterSnapshot:
                 int(layout.get("backing_stride", 0)) != BACKING_STRIDE):
             raise ValueError("unsupported roster memory layout")
         count = int(data["count"])
+        if schema_version == 1:
+            # Schema 1 predated capacity capture. Never hide a stored
+            # gladiator, while retaining the retail profile's two free slots.
+            unlocked_slots = max(2, count)
+        else:
+            unlocked_slots = int(data["unlocked_slots"])
         records = tuple(
             _parse_words(values, RECORD_WORDS, "record")
             for values in data.get("records", [])
@@ -224,7 +239,7 @@ class RosterSnapshot:
             _parse_words(values, BACKING_WORDS, "backing")
             for values in data.get("backings", [])
         )
-        return cls(count, records, backings)
+        return cls(count, unlocked_slots, records, backings)
 
 
 class RosterStore:
@@ -308,12 +323,17 @@ class RosterBridge:
         if client.read32(STORE_COUNT) != 6:
             return False
         count = client.read32(OWNED_COUNT)
-        return 1 <= count <= MAX_ROSTER
+        unlocked_slots = client.read32(UNLOCKED_SLOT_INDEX) + 1
+        return (1 <= count <= MAX_ROSTER and
+                max(2, count) <= unlocked_slots <= MAX_ROSTER)
 
     def read_snapshot(self, client):
         count_before = client.read32(OWNED_COUNT)
         if not 1 <= count_before <= MAX_ROSTER:
             raise PineError(f"unsafe owned count {count_before}")
+        unlocked_slots = client.read32(UNLOCKED_SLOT_INDEX) + 1
+        if not max(2, count_before) <= unlocked_slots <= MAX_ROSTER:
+            raise PineError(f"unsafe unlocked slot count {unlocked_slots}")
         records = []
         backings = []
         for slot in range(count_before):
@@ -336,7 +356,9 @@ class RosterBridge:
         count_after = client.read32(OWNED_COUNT)
         if count_after != count_before:
             raise PineError("roster changed during capture")
-        return RosterSnapshot(count_before, tuple(records), tuple(backings))
+        return RosterSnapshot(
+            count_before, unlocked_slots, tuple(records), tuple(backings)
+        )
 
     def restore_snapshot(self, client, snapshot):
         # Validate every destination pointer before mutating any state.
@@ -348,6 +370,10 @@ class RosterBridge:
                     f"refusing restore: slot {slot} pointer 0x{pointer:08X}, "
                     f"expected 0x{expected:08X}"
                 )
+
+        # Restore capacity before publishing roster occupancy. The Ludus UI
+        # copies this section-1 field into its view state on first entry.
+        client.write32(UNLOCKED_SLOT_INDEX, snapshot.unlocked_slots - 1)
 
         # Backing storage first.  Inactive B[1..] records follow while the live
         # count still hides them; B[0] is written last, then count publishes the

@@ -275,9 +275,25 @@ def encode_inventory(items):
     )
 
 
-def encode_purchase_result(gold, silver, item_id, quantity=1):
+def encode_qdatetime(value=None):
+    """Pack the title's zero-based-month/day Quazal date/time in UTC."""
+    if value is None:
+        value = datetime.datetime.now(datetime.timezone.utc)
+    return (
+        ((value.year & 0x3FFF) << 26)
+        | (((value.month - 1) & 0x0F) << 22)
+        | (((value.day - 1) & 0x1F) << 17)
+        | ((value.hour & 0x1F) << 12)
+        | ((value.minute & 0x3F) << 6)
+        | (value.second & 0x3F)
+    )
+
+
+def encode_purchase_result(gold, silver, item_id, transaction_time=0, quantity=1):
     """Encode method 7/13 balances and its 16-byte transaction receipt."""
-    return struct.pack("<IIIQI", gold, silver, item_id, 0, quantity)
+    return struct.pack(
+        "<IIIQI", gold, silver, item_id, transaction_time, quantity
+    )
 
 
 LOG_PATH = os.environ.get(
@@ -915,13 +931,15 @@ def main(port=None, stop_event=None, ready_event=None, host="0.0.0.0"):
                             # 99999 is a command used to refresh the timed
                             # gladiator pool, including a free post-fight
                             # refresh.  It is not a purchasable inventory item.
-                            # The receipt still has the method-7 structure, but
-                            # quantity zero tells the client no item was minted.
+                            # The refresh remains absent from method-3 inventory;
+                            # its method-7 receipt only acknowledges the command.
                             gold, silver = ECONOMY.refresh_store(
                                 gold_cost, silver_cost
                             )
                             resp_body = encode_purchase_result(
-                                gold, silver, item_id, quantity=0
+                                gold, silver, STORE_REFRESH_SENTINEL,
+                                transaction_time=encode_qdatetime(),
+                                quantity=1,
                             )
                             label = "MONETIZATION_STORE_REFRESH"
                             log(f"   *** Recruit pool refresh gold_cost={gold_cost} "
@@ -935,13 +953,51 @@ def main(port=None, stop_event=None, ready_event=None, host="0.0.0.0"):
                             # receipt: item id, an eight-byte transaction/time
                             # value, and the resulting quantity.
                             resp_body = encode_purchase_result(
-                                gold, silver, item_id
+                                gold, silver, item_id,
+                                transaction_time=encode_qdatetime(),
+                                quantity=1,
                             )
                             label = "MONETIZATION_PURCHASE"
                             log(f"   *** Purchase item={item_id} "
                                 f"gold_cost={gold_cost} "
                                 f"silver_cost={silver_cost} -> balances "
                                 f"gold={gold} silver={silver} ***")
+                    elif rmc["method_id"] == 11:    # Finalize gladiator outcome
+                        # Live death trace: this follows m12 (death notice) and
+                        # m6 (fight income), carrying <Iii> = (gladiator id,
+                        # gold cost, silver cost).  The client decodes exactly
+                        # two u32 values from its response, just like m6.  A
+                        # dead gladiator must not be added to item inventory;
+                        # the client has already updated its local roster/status
+                        # and this is its completion/settlement boundary.
+                        try:
+                            gladiator_id, gold_cost, silver_cost = \
+                                struct.unpack_from("<Iii", rmc["params"], 0)
+                        except struct.error:
+                            gladiator_id, gold_cost, silver_cost = 0, -1, -1
+                        gold_delta = -gold_cost if gold_cost >= 0 else 0
+                        silver_delta = -silver_cost if silver_cost >= 0 else 0
+                        gold, silver = ECONOMY.add_income(
+                            gold_delta, silver_delta
+                        )
+                        resp_body = struct.pack("<II", gold, silver)
+                        label = "MONETIZATION_GLADIATOR_OUTCOME"
+                        log(f"   *** Gladiator outcome id={gladiator_id} "
+                            f"gold_cost={gold_cost} silver_cost={silver_cost} "
+                            f"-> balances gold={gold} silver={silver} ***")
+                    elif rmc["method_id"] == 12:    # Record gladiator death
+                        try:
+                            gladiator_id = struct.unpack_from(
+                                "<I", rmc["params"], 0
+                            )[0]
+                        except struct.error:
+                            gladiator_id = 0
+                        # The client applies the dead/status fields locally
+                        # before this call and blocks the fight-result flow on
+                        # its RMC completion. There are no output parameters.
+                        resp_body = b""
+                        label = "MONETIZATION_GLADIATOR_DEATH"
+                        log(f"   *** Gladiator death id={gladiator_id} ***")
                     elif rmc["method_id"] == 13:    # Recruit gladiator
                         # Live-traced (2026-08-11): the Recruit-store purchase
                         # sends 102/m13 and blocks until answered - the infinite
@@ -974,7 +1030,9 @@ def main(port=None, stop_event=None, ready_event=None, host="0.0.0.0"):
                             resp_body = b""
                         else:  # "m7"
                             resp_body = encode_purchase_result(
-                                gold, silver, gladiator_id
+                                gold, silver, gladiator_id,
+                                transaction_time=encode_qdatetime(),
+                                quantity=1,
                             )
                         label = "MONETIZATION_RECRUIT"
                         log(f"   *** Recruit gladiator={gladiator_id} unk={unk} "

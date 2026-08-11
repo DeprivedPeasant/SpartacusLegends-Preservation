@@ -21,6 +21,7 @@ tools/*
 !tools/prudp_server.py
 !tools/spartacus_server.py
 !tools/roster_bridge.py
+!tools/patch_installer.py
 !tools/UbiOnlineConfigService/
 tools/UbiOnlineConfigService/*
 !tools/UbiOnlineConfigService/__init__.py
@@ -31,6 +32,7 @@ tests/*
 !tests/test_roster_bridge.py
 !tests/test_economy_store.py
 !tests/test_release_patch.py
+!tests/test_patch_installer.py
 
 **/__pycache__/
 *.py[cod]
