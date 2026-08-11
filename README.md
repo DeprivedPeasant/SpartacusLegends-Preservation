@@ -128,4 +128,4 @@ To build the standalone Windows release:
 powershell -ExecutionPolicy Bypass -File packaging\build_release.ps1
 ```
 
-The build script creates `dist\SpartacusLegends-Preservation-v0.3.2.zip`.
+The build script creates `dist\SpartacusLegends-Preservation-v0.3.3.zip`.
