@@ -30,3 +30,16 @@ PPU-81471d050c14f4d20b4027686f8b571dafd32394:
     Patch:
       - [ be32, 0x00054B24, 0x38000001 ] # fighter slot 0 invulnerable
       - [ be32, 0x00054B60, 0x38000001 ] # one-hit damage against slot 1
+
+  "Spartacus Legends - Skip startup logo screens (optional)":
+    Games:
+      "Spartacus Legends":
+        NPUB30746: [ 01.00 ]
+    Author: "Spartacus Legends preservation project"
+    Notes: >
+      OPTIONAL. Skips the publisher/developer Bink-video playlist by taking
+      the original playlist-complete transition. The title, login, profile,
+      and roster initialization paths remain unchanged.
+    Patch Version: "1.0"
+    Patch:
+      - [ be32, 0x000F4F80, 0x480000C4 ] # startup playlist -> finished branch

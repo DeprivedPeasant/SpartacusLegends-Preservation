@@ -31,8 +31,8 @@ No game files or decrypted executable content are included.
      file into the existing file beneath its single `Version: 1.2` header.
    - Restart RPCS3, open **Manage > Game Patches**, enable
      **Spartacus Legends - Server emulator compatibility** for NPUB30746
-     01.00, and click **Save**. The separately listed **One-hit fight debug
-     cheat (optional)** should remain disabled for normal play.
+     01.00, and click **Save**. The separately listed optional patches can
+     remain disabled unless wanted.
 3. Right-click the game and open its custom configuration. Under **Network**,
    set:
 
@@ -53,7 +53,7 @@ No game files or decrypted executable content are included.
 5. Cold-boot the game and log in normally. The game should display **Saving**
    and continue to the main menu.
 
-## Saves and optional debug cheat
+## Saves and optional patches
 
 The server stores its economy profile in `data\profile.json` and its complete
 gladiator roster in `data\roster.json` beside the executable. The game
@@ -64,6 +64,11 @@ after the first successful login while RPCS3 IPC is enabled.
 For rapid testing, **Spartacus Legends - One-hit fight debug cheat (optional)**
 can be enabled in RPCS3's patch manager. It makes the player invulnerable and
 ends offline fights with the first damaging hit. Disable it for normal play;
+after changing its state, remove the game's PPU cache and cold-boot once.
+
+**Spartacus Legends - Skip startup logo screens (optional)** skips the four
+publisher/developer video screens while retaining the legal notices and the
+game's normal title transition. Enable it in RPCS3's patch manager if desired;
 after changing its state, remove the game's PPU cache and cold-boot once.
 
 This follows the RPCS3 Wiki's
@@ -112,4 +117,4 @@ To build the standalone Windows release:
 powershell -ExecutionPolicy Bypass -File packaging\build_release.ps1
 ```
 
-The build script creates `dist\SpartacusLegends-Preservation-v0.3.0.zip`.
+The build script creates `dist\SpartacusLegends-Preservation-v0.3.1.zip`.

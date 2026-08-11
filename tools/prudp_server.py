@@ -155,6 +155,7 @@ PROTO_AUTHENTICATION = 0x0A
 PROTO_SECURE = 0x0B          # SecureConnectionProtocol
 PROTO_NOTIFICATION = 0x0E    # GlobalNotificationEventProtocol (live-confirmed)
 PROTO_MONETIZATION = 102
+STORE_REFRESH_SENTINEL = 99999
 PROTO_NAMES = {0x0A: "TicketGranting", 0x0B: "SecureConnection",
                0x0E: "GlobalNotificationEvent", 102: "Monetization"}
 
@@ -176,9 +177,13 @@ class EconomyStore:
                 loaded = json.load(f)
             self.data["gold"] = max(0, int(loaded.get("gold", 0)))
             self.data["silver"] = max(0, int(loaded.get("silver", 0)))
+            # Older server builds treated the recruitment-store refresh
+            # command (99999) as a normal item purchase.  It is not an item
+            # and must never be returned by RequestInventory.
             self.data["owned_items"] = sorted({
                 int(item) & 0xFFFFFFFF
                 for item in loaded.get("owned_items", [])
+                if (int(item) & 0xFFFFFFFF) != STORE_REFRESH_SENTINEL
             })
         except FileNotFoundError:
             pass
@@ -214,6 +219,16 @@ class EconomyStore:
                 owned.add(item_id)
                 self.data["owned_items"] = sorted(owned)
                 self._save()
+            return self.data["gold"], self.data["silver"]
+
+    def refresh_store(self, gold_cost, silver_cost):
+        """Debit a recruit-pool refresh without creating an owned item."""
+        with self.lock:
+            if gold_cost >= 0:
+                self.data["gold"] = max(0, self.data["gold"] - gold_cost)
+            if silver_cost >= 0:
+                self.data["silver"] = max(0, self.data["silver"] - silver_cost)
+            self._save()
             return self.data["gold"], self.data["silver"]
 
     def requested_owned_items(self, requested):
@@ -258,6 +273,11 @@ def encode_inventory(items):
     return struct.pack("<I", len(items)) + b"".join(
         encode_inventory_item(item) for item in items
     )
+
+
+def encode_purchase_result(gold, silver, item_id, quantity=1):
+    """Encode method 7/13 balances and its 16-byte transaction receipt."""
+    return struct.pack("<IIIQI", gold, silver, item_id, 0, quantity)
 
 
 LOG_PATH = os.environ.get(
@@ -891,21 +911,37 @@ def main(port=None, stop_event=None, ready_event=None, host="0.0.0.0"):
                             )
                         except struct.error:
                             item_id, gold_cost, silver_cost = 0, -1, -1
-                        gold, silver = ECONOMY.purchase(
-                            item_id, gold_cost, silver_cost
-                        )
-                        # The final three fields form the purchased-item receipt:
-                        # item id, an eight-byte transaction/time value, and the
-                        # resulting quantity.  Returning an all-zero placeholder
-                        # let the call complete but gave the client no item to
-                        # add to its live inventory.
-                        resp_body = struct.pack(
-                            "<IIIQI", gold, silver, item_id, 0, 1
-                        )
-                        label = "MONETIZATION_PURCHASE"
-                        log(f"   *** Purchase item={item_id} gold_cost={gold_cost} "
-                            f"silver_cost={silver_cost} -> balances "
-                            f"gold={gold} silver={silver} ***")
+                        if item_id == STORE_REFRESH_SENTINEL:
+                            # 99999 is a command used to refresh the timed
+                            # gladiator pool, including a free post-fight
+                            # refresh.  It is not a purchasable inventory item.
+                            # The receipt still has the method-7 structure, but
+                            # quantity zero tells the client no item was minted.
+                            gold, silver = ECONOMY.refresh_store(
+                                gold_cost, silver_cost
+                            )
+                            resp_body = encode_purchase_result(
+                                gold, silver, item_id, quantity=0
+                            )
+                            label = "MONETIZATION_STORE_REFRESH"
+                            log(f"   *** Recruit pool refresh gold_cost={gold_cost} "
+                                f"silver_cost={silver_cost} -> balances "
+                                f"gold={gold} silver={silver} ***")
+                        else:
+                            gold, silver = ECONOMY.purchase(
+                                item_id, gold_cost, silver_cost
+                            )
+                            # The final three fields form the purchased-item
+                            # receipt: item id, an eight-byte transaction/time
+                            # value, and the resulting quantity.
+                            resp_body = encode_purchase_result(
+                                gold, silver, item_id
+                            )
+                            label = "MONETIZATION_PURCHASE"
+                            log(f"   *** Purchase item={item_id} "
+                                f"gold_cost={gold_cost} "
+                                f"silver_cost={silver_cost} -> balances "
+                                f"gold={gold} silver={silver} ***")
                     elif rmc["method_id"] == 13:    # Recruit gladiator
                         # Live-traced (2026-08-11): the Recruit-store purchase
                         # sends 102/m13 and blocks until answered - the infinite
@@ -937,8 +973,8 @@ def main(port=None, stop_event=None, ready_event=None, host="0.0.0.0"):
                         elif shape == "empty":
                             resp_body = b""
                         else:  # "m7"
-                            resp_body = struct.pack(
-                                "<IIIQI", gold, silver, gladiator_id, 0, 1
+                            resp_body = encode_purchase_result(
+                                gold, silver, gladiator_id
                             )
                         label = "MONETIZATION_RECRUIT"
                         log(f"   *** Recruit gladiator={gladiator_id} unk={unk} "

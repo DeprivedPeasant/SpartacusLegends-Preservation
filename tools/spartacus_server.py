@@ -14,7 +14,7 @@ import time
 import traceback
 
 
-VERSION = "0.3.0"
+VERSION = "0.3.1"
 DEFAULT_HTTP_PORT = 80
 DEFAULT_AUTH_PORT = 21000
 DEFAULT_SECURE_PORT = 21001
