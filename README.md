@@ -1,5 +1,3 @@
-WARNING: Whilst this will get you in and playing the game, a lot of things don't currently work. Most pressingly, saving and recruiting gladiators doesn't work. If you quit the game you will lose your current gladiator, though you will keep your money and fame progress.
-
 # Spartacus Legends preservation server
 
 This project restores the login/bootstrap path for the PS3 version of
@@ -44,6 +42,11 @@ No game files or decrypted executable content are included.
 
      `onlineconfigservice.ubi.com=127.0.0.1`
 
+   In RPCS3's main settings, open **Advanced**, enable **IPC Server**, and
+   leave its port at `28012`. The preservation server uses this local PINE
+   connection to preserve complete gladiator rosters and their per-gladiator
+   equipment across cold boots.
+
 4. After installing or changing the patch, right-click the game and choose
    **Remove > PPU Cache** once. This prevents RPCS3 from reusing LLVM code
    compiled from an older patch.
@@ -52,9 +55,11 @@ No game files or decrypted executable content are included.
 
 ## Saves and optional debug cheat
 
-The server stores its economy profile in `data\profile.json` beside the
-executable. The game continues to write its normal RPCS3 save data. Back up
-both when moving an established profile to another PC.
+The server stores its economy profile in `data\profile.json` and its complete
+gladiator roster in `data\roster.json` beside the executable. The game
+continues to write its normal RPCS3 save data. Back up all three when moving an
+established profile to another PC. `roster.json` is created automatically
+after the first successful login while RPCS3 IPC is enabled.
 
 For rapid testing, **Spartacus Legends - One-hit fight debug cheat (optional)**
 can be enabled in RPCS3's patch manager. It makes the player invulnerable and
@@ -71,6 +76,7 @@ custom patch saved under another name or outside its `patches` directory.
 - TCP 80: Ubisoft OnlineConfigService replacement
 - UDP 21000: Quazal authentication/TicketGranting
 - UDP 21001: Quazal secure connection and title services
+- TCP 28012 client: automatic PINE roster capture/restore through RPCS3 IPC
 
 All listeners bind to `127.0.0.1` by default. Logs are written to the `logs`
 folder beside the executable. Press Ctrl+C in the server window to shut all
@@ -84,6 +90,12 @@ other program using that port. Only one preservation server should run.
 If RPCS3 shows the service-unavailable dialog, verify the IP swap spelling,
 that the server reported all services ready, and that the compatibility patch
 is enabled for NPUB30746 version 01.00.
+
+If currency and campaign progress persist but the gladiator roster does not,
+verify RPCS3's IPC Server is enabled on port `28012` and inspect
+`logs\roster_bridge.log`. Do not run another PINE client at the same time as
+the preservation server. Researchers can launch with `--no-roster-bridge` to
+leave IPC available to another tool.
 
 ## Running from source
 
@@ -100,4 +112,4 @@ To build the standalone Windows release:
 powershell -ExecutionPolicy Bypass -File packaging\build_release.ps1
 ```
 
-The build script creates `dist\SpartacusLegends-Preservation-v0.2.0.zip`.
+The build script creates `dist\SpartacusLegends-Preservation-v0.3.0.zip`.

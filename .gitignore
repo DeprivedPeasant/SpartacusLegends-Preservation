@@ -20,10 +20,15 @@ patches/*
 tools/*
 !tools/prudp_server.py
 !tools/spartacus_server.py
+!tools/roster_bridge.py
 !tools/UbiOnlineConfigService/
 tools/UbiOnlineConfigService/*
 !tools/UbiOnlineConfigService/__init__.py
 !tools/UbiOnlineConfigService/spartacus_onlineconfig.py
+
+!tests/
+tests/*
+!tests/test_roster_bridge.py
 
 **/__pycache__/
 *.py[cod]
