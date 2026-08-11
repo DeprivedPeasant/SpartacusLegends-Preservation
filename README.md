@@ -5,7 +5,8 @@ Spartacus Legends using a local OnlineConfig and Quazal RendezVous server.
 Once bootstrap completes, the preserved single-player game runs locally. The
 server reimplements the retired economy and inventory calls, while the patch
 restores locally saved fame, currency, levels, purchases, and fight progress
-across cold boots.
+across cold boots. The compatibility patch also completes the post-fight
+gladiator-recruitment store refresh, which otherwise retries indefinitely.
 
 Tested configuration:
 
@@ -117,4 +118,4 @@ To build the standalone Windows release:
 powershell -ExecutionPolicy Bypass -File packaging\build_release.ps1
 ```
 
-The build script creates `dist\SpartacusLegends-Preservation-v0.3.1.zip`.
+The build script creates `dist\SpartacusLegends-Preservation-v0.3.2.zip`.

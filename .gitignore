@@ -30,6 +30,7 @@ tools/UbiOnlineConfigService/*
 tests/*
 !tests/test_roster_bridge.py
 !tests/test_economy_store.py
+!tests/test_release_patch.py
 
 **/__pycache__/
 *.py[cod]
