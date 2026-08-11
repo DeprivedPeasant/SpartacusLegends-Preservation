@@ -18,15 +18,20 @@ No game files or decrypted executable content are included.
 
 ## Quick setup
 
+Before starting, install the **USA version of Spartacus Legends, version
+01.00 (`NPUB30746`)**, in RPCS3. Other regions and game versions are not
+supported by the supplied compatibility patch. You also need an **RPCN
+account configured and signed in through RPCS3**.
+
 1. Extract the release ZIP and run `SpartacusLegendsServer.exe`. Leave its
    window open while playing. It should report that TCP 80 and UDP 21000/21001
    are ready.
-2. Run `SpartacusLegendsPatchInstaller.exe` and either drag your RPCS3 folder
-   onto it or paste that folder's path. Confirm when prompted. It updates only
-   the three Spartacus Legends entries in `patches\imported_patch.yml`, keeps
-   unrelated custom patches intact, and creates a timestamped backup first.
-   Then restart RPCS3 and enable **Spartacus Legends - Server emulator
-   compatibility** for NPUB30746 01.00 in **Manage > Game Patches**.
+2. Close RPCS3, then run `SpartacusLegendsPatchInstaller.exe` and either drag
+   your RPCS3 folder onto it or paste that folder's path. Confirm when prompted.
+   The installer merges the three supplied patches, applies the NPUB30746
+   network configuration, enables the required compatibility patch and IPC
+   server, and clears the game's PPU cache. Existing configuration files are
+   backed up and unrelated settings and optional patch choices are retained.
 
    Manual installation remains available if the updater cannot locate your
    RPCS3 folder:
@@ -42,8 +47,8 @@ No game files or decrypted executable content are included.
      **Spartacus Legends - Server emulator compatibility** for NPUB30746
      01.00, and click **Save**. The separately listed optional patches can
      remain disabled unless wanted.
-3. Right-click the game and open its custom configuration. Under **Network**,
-   set:
+3. If performing a manual installation, right-click the game and open its
+   custom configuration. Under **Network**, set:
 
    - **Network Status:** Connected
    - **PSN Status:** RPCN
@@ -56,9 +61,9 @@ No game files or decrypted executable content are included.
    local PINE connection to preserve complete gladiator rosters and their
    per-gladiator equipment across cold boots.
 
-4. After installing or changing the patch, right-click the game and choose
-   **Remove > PPU Cache** once. This prevents RPCS3 from reusing LLVM code
-   compiled from an older patch.
+4. For a manual installation, right-click the game and choose **Remove > PPU
+   Cache** once after installing or changing the patch. This prevents RPCS3
+   from reusing LLVM code compiled from an older patch.
 5. Cold-boot the game and log in normally. The game should display **Saving**
    and continue to the main menu.
 
@@ -128,4 +133,4 @@ To build the standalone Windows release:
 powershell -ExecutionPolicy Bypass -File packaging\build_release.ps1
 ```
 
-The build script creates `dist\SpartacusLegends-Preservation-v0.3.3.zip`.
+The build script creates `dist\SpartacusLegends-Preservation-v0.3.4.zip`.
