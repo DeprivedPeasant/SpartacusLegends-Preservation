@@ -14,10 +14,11 @@ import time
 import traceback
 
 
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 DEFAULT_HTTP_PORT = 80
 DEFAULT_AUTH_PORT = 21000
 DEFAULT_SECURE_PORT = 21001
+DEFAULT_PINE_PORT = 28012
 
 
 def application_dir() -> Path:
@@ -41,6 +42,8 @@ def configure_environment(log_dir: Path, secure_port: int) -> None:
         "SPARTACUS_PROFILE": str(application_dir() / "data" / "profile.json"),
         "SPARTACUS_PRUDP_LOG": str(log_dir / "prudp.log"),
         "SPARTACUS_CONFIG_LOG": str(log_dir / "online_config.log"),
+        "SPARTACUS_ROSTER_PROFILE": str(application_dir() / "data" / "roster.json"),
+        "SPARTACUS_ROSTER_LOG": str(log_dir / "roster_bridge.log"),
     }
     for key, value in defaults.items():
         os.environ.setdefault(key, value)
@@ -101,6 +104,10 @@ def parse_args():
     parser.add_argument("--http-port", type=int, default=DEFAULT_HTTP_PORT)
     parser.add_argument("--auth-port", type=int, default=DEFAULT_AUTH_PORT)
     parser.add_argument("--secure-port", type=int, default=DEFAULT_SECURE_PORT)
+    parser.add_argument("--pine-port", type=int, default=DEFAULT_PINE_PORT,
+                        help="RPCS3 IPC/PINE port used for roster persistence")
+    parser.add_argument("--no-roster-bridge", action="store_true",
+                        help="disable automatic roster capture/restore")
     parser.add_argument("--check", action="store_true",
                         help="check ports and configuration, then exit")
     parser.add_argument("--no-wait", action="store_true",
@@ -146,6 +153,7 @@ def main() -> int:
     # Import after setting the known-good environment; the protocol module
     # intentionally reads its response matrix once at startup.
     import prudp_server
+    import roster_bridge
     from UbiOnlineConfigService import spartacus_onlineconfig
 
     stop_event = threading.Event()
@@ -153,6 +161,7 @@ def main() -> int:
     ready_http = threading.Event()
     ready_auth = threading.Event()
     ready_secure = threading.Event()
+    ready_roster = threading.Event()
 
     components = [
         ("OnlineConfig", spartacus_onlineconfig.serve,
@@ -163,6 +172,11 @@ def main() -> int:
         ("Quazal secure", prudp_server.main,
          (args.secure_port, stop_event, ready_secure, args.host)),
     ]
+    if not args.no_roster_bridge:
+        components.append(
+            ("Roster companion", roster_bridge.run_roster_bridge,
+             (stop_event, ready_roster, "127.0.0.1", args.pine_port))
+        )
     threads = []
     for name, target, component_args in components:
         thread = threading.Thread(
@@ -174,7 +188,9 @@ def main() -> int:
         thread.start()
         threads.append(thread)
 
-    ready_events = (ready_http, ready_auth, ready_secure)
+    ready_events = [ready_http, ready_auth, ready_secure]
+    if not args.no_roster_bridge:
+        ready_events.append(ready_roster)
     if not wait_for_services(ready_events, failures):
         stop_event.set()
         if not failures.empty():
@@ -191,6 +207,8 @@ def main() -> int:
     print("\nAll services are ready.")
     print("RPCS3 IP swap: onlineconfigservice.ubi.com=127.0.0.1")
     print("Enable patch: Spartacus Legends - Server emulator compatibility")
+    if not args.no_roster_bridge:
+        print(f"Roster persistence: RPCS3 IPC must be enabled on port {args.pine_port}")
     print("Start the game, log in, and leave this window open.")
     print("Press Ctrl+C to stop the server.\n")
 
