@@ -42,10 +42,10 @@ No game files or decrypted executable content are included.
 
      `onlineconfigservice.ubi.com=127.0.0.1`
 
-   In RPCS3's main settings, open **Advanced**, enable **IPC Server**, and
-   leave its port at `28012`. The preservation server uses this local PINE
-   connection to preserve complete gladiator rosters and their per-gladiator
-   equipment across cold boots.
+   In RPCS3, open **Manage > Network Services > IPC**, enable **Enable IPC
+   Server**, and leave its port at `28012`. The preservation server uses this
+   local PINE connection to preserve complete gladiator rosters and their
+   per-gladiator equipment across cold boots.
 
 4. After installing or changing the patch, right-click the game and choose
    **Remove > PPU Cache** once. This prevents RPCS3 from reusing LLVM code
