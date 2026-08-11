@@ -906,6 +906,44 @@ def main(port=None, stop_event=None, ready_event=None, host="0.0.0.0"):
                         log(f"   *** Purchase item={item_id} gold_cost={gold_cost} "
                             f"silver_cost={silver_cost} -> balances "
                             f"gold={gold} silver={silver} ***")
+                    elif rmc["method_id"] == 13:    # Recruit gladiator
+                        # Live-traced (2026-08-11): the Recruit-store purchase
+                        # sends 102/m13 and blocks until answered - the infinite
+                        # spinner. Params mirror method 7 (purchase) but for a
+                        # gladiator; the user confirmed p3 is the silver cost and
+                        # that gladiators cost gold OR silver (the unused currency
+                        # is -1):
+                        #   u32 gladiator_id, u32 unk, i32 gold_cost, i32 silver_cost
+                        try:
+                            gladiator_id, unk, gold_cost, silver_cost = \
+                                struct.unpack_from("<IIii", rmc["params"], 0)
+                        except struct.error:
+                            gladiator_id, unk, gold_cost, silver_cost = 0, 0, -1, -1
+                        # Debit via add_income (negative delta) so the gladiator
+                        # id does NOT pollute the item inventory (owned_items),
+                        # unlike purchase(); -1 costs are skipped.
+                        gold_delta = -gold_cost if gold_cost >= 0 else 0
+                        silver_delta = -silver_cost if silver_cost >= 0 else 0
+                        gold, silver = ECONOMY.add_income(gold_delta, silver_delta)
+                        # Best-supported response shape: mirror the proven m7
+                        # receipt (balances + id/txn/quantity). The recruited
+                        # gladiator's full data is already client-side (the store
+                        # pool), so a success receipt should let the client move
+                        # it into the owned roster. Overridable for iteration via
+                        # P102M13_SHAPE if this proves wrong.
+                        shape = os.environ.get("P102M13_SHAPE", "m7")
+                        if shape == "balances":
+                            resp_body = struct.pack("<II", gold, silver)
+                        elif shape == "empty":
+                            resp_body = b""
+                        else:  # "m7"
+                            resp_body = struct.pack(
+                                "<IIIQI", gold, silver, gladiator_id, 0, 1
+                            )
+                        label = "MONETIZATION_RECRUIT"
+                        log(f"   *** Recruit gladiator={gladiator_id} unk={unk} "
+                            f"gold_cost={gold_cost} silver_cost={silver_cost} "
+                            f"shape={shape} -> balances gold={gold} silver={silver} ***")
 
                 elif rmc and rmc["is_request"] and GENERIC_ACK:
                     # Probe for protocols we haven't reversed yet. Every
