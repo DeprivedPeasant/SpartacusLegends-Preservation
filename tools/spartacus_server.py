@@ -13,8 +13,9 @@ import threading
 import time
 import traceback
 
+from _version import __version__ as VERSION
 
-VERSION = "0.3.5"
+
 DEFAULT_HTTP_PORT = 80
 DEFAULT_AUTH_PORT = 21000
 DEFAULT_SECURE_PORT = 21001

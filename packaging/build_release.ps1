@@ -5,7 +5,16 @@ $BuildRoot = Join-Path $ProjectRoot '.build'
 $VenvRoot = Join-Path $BuildRoot 'venv'
 $VenvPython = Join-Path $VenvRoot 'Scripts\python.exe'
 $DistRoot = Join-Path $ProjectRoot 'dist'
-$PackageRoot = Join-Path $BuildRoot 'SpartacusLegends-Preservation-v0.3.5'
+
+# Single source of truth: the version lives only in tools/_version.py.
+$VersionFile = Join-Path $ProjectRoot 'tools\_version.py'
+$VersionMatch = Select-String -Path $VersionFile -Pattern '__version__\s*=\s*"([^"]+)"'
+if (-not $VersionMatch) {
+    throw "Could not read __version__ from $VersionFile"
+}
+$Version = $VersionMatch.Matches[0].Groups[1].Value
+
+$PackageRoot = Join-Path $BuildRoot "SpartacusLegends-Preservation-v$Version"
 
 New-Item -ItemType Directory -Force -Path $BuildRoot,$DistRoot,$PackageRoot | Out-Null
 
@@ -28,6 +37,7 @@ if ($LASTEXITCODE -ne 0) {
     --console `
     --name SpartacusLegendsServer `
     --paths (Join-Path $ProjectRoot 'tools') `
+    --hidden-import _version `
     --hidden-import prudp_server `
     --hidden-import roster_bridge `
     --hidden-import UbiOnlineConfigService.spartacus_onlineconfig `
@@ -59,6 +69,6 @@ Copy-Item -Force -LiteralPath (Join-Path $DistRoot 'SpartacusLegendsPatchInstall
 Copy-Item -Force -LiteralPath (Join-Path $PSScriptRoot 'SpartacusLegends_ServerPatch.yml') -Destination $PackageRoot
 Copy-Item -Force -LiteralPath (Join-Path $ProjectRoot 'README.md') -Destination $PackageRoot
 
-$ZipPath = Join-Path $DistRoot 'SpartacusLegends-Preservation-v0.3.5.zip'
+$ZipPath = Join-Path $DistRoot "SpartacusLegends-Preservation-v$Version.zip"
 Compress-Archive -Force -Path (Join-Path $PackageRoot '*') -DestinationPath $ZipPath
 Write-Host "Release created: $ZipPath"

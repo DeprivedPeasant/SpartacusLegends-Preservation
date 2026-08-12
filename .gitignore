@@ -18,6 +18,7 @@ patches/*
 
 !tools/
 tools/*
+!tools/_version.py
 !tools/prudp_server.py
 !tools/spartacus_server.py
 !tools/roster_bridge.py
