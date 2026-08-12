@@ -14,7 +14,7 @@ import time
 import traceback
 
 
-VERSION = "0.3.2"
+VERSION = "0.3.5"
 DEFAULT_HTTP_PORT = 80
 DEFAULT_AUTH_PORT = 21000
 DEFAULT_SECURE_PORT = 21001
@@ -43,6 +43,7 @@ def configure_environment(log_dir: Path, secure_port: int) -> None:
         "SPARTACUS_PRUDP_LOG": str(log_dir / "prudp.log"),
         "SPARTACUS_CONFIG_LOG": str(log_dir / "online_config.log"),
         "SPARTACUS_ROSTER_PROFILE": str(application_dir() / "data" / "roster.json"),
+        "SPARTACUS_CAMPAIGN_PROFILE": str(application_dir() / "data" / "campaign.json"),
         "SPARTACUS_ROSTER_LOG": str(log_dir / "roster_bridge.log"),
     }
     for key, value in defaults.items():
