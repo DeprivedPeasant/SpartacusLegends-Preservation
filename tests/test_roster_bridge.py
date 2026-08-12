@@ -36,6 +36,16 @@ class MemoryPine:
             self.memory64[record] = (slot + 1) << 56 | backing
             for offset in range(0, rb.BACKING_STRIDE, 8):
                 self.memory64[backing + offset] = (slot + 9) << 56 | offset
+        # Campaign manager 5: slot points to the expected manager; dirty flag
+        # set; completion cells default to zero (empty) until populated.
+        self.memory32[rb.CAMPAIGN_MANAGER_SLOT] = rb.EXPECTED_CAMPAIGN_MANAGER
+        self.memory32[rb.EXPECTED_CAMPAIGN_MANAGER + rb.CAMPAIGN_DIRTY_OFFSET] = 1
+
+    def set_campaign_cell(self, index, words):
+        base = rb.EXPECTED_CAMPAIGN_MANAGER + rb.CAMPAIGN_TABLE_OFFSET
+        address = base + index * rb.CAMPAIGN_CELL_STRIDE
+        for word_index, word in enumerate(words):
+            self.memory64[address + word_index * 8] = word
 
     def status(self):
         return 0
@@ -156,6 +166,85 @@ class RosterBridgeTests(unittest.TestCase):
             migrated = bridge.store.load()
             self.assertEqual(migrated.count, 3)
             self.assertEqual(migrated.unlocked_slots, 3)
+
+
+class CampaignBridgeTests(unittest.TestCase):
+    def bridge(self, path):
+        return rb.RosterBridge(
+            rb.RosterStore(path.with_name("roster.json")), NullLog(),
+            campaign_store=rb.CampaignStore(path),
+        )
+
+    def test_campaign_round_trip_and_build_guard(self):
+        pine = MemoryPine()
+        pine.set_campaign_cell(1, (0x0000000300000000, 0x0000000000000001))
+        pine.set_campaign_cell(70, (0x0000000000000000, 0x0000010000000000))
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "campaign.json"
+            bridge = self.bridge(path)
+            snapshot = bridge.read_campaign(pine)
+            self.assertEqual([index for index, _ in snapshot.cells], [1, 70])
+            bridge.campaign_store.save(snapshot)
+            self.assertEqual(bridge.campaign_store.load(), snapshot)
+
+            document = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(document["schema_version"], 1)
+            document["game"]["uuid"] = "wrong-build"
+            path.write_text(json.dumps(document), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "different game build"):
+                bridge.campaign_store.load()
+
+    def test_campaign_restore_writes_cells_and_dirty_then_verifies(self):
+        source = MemoryPine()
+        source.set_campaign_cell(1, (0x0000000300000000, 0x0000000000000001))
+        source.set_campaign_cell(200, (0x00000000000000AA, 0x0000000000000000))
+        target = MemoryPine()
+        target.memory32[rb.EXPECTED_CAMPAIGN_MANAGER + rb.CAMPAIGN_DIRTY_OFFSET] = 0
+        with tempfile.TemporaryDirectory() as directory:
+            bridge = self.bridge(Path(directory) / "campaign.json")
+            snapshot = bridge.read_campaign(source)
+            bridge.restore_campaign(target, snapshot)
+            self.assertEqual(bridge.read_campaign(target), snapshot)
+            # Dirty flag is forced true so the game treats the table as populated.
+            self.assertEqual(
+                target.memory32[rb.EXPECTED_CAMPAIGN_MANAGER + rb.CAMPAIGN_DIRTY_OFFSET],
+                1,
+            )
+            # Cells the game sets itself must not fail read-back verification.
+            target.set_campaign_cell(5, (0x0000000000000001, 0))
+            bridge.restore_campaign(target, snapshot)
+
+    def test_campaign_pointer_guard_rejects_live_heap_value(self):
+        pine = MemoryPine()
+        pine.set_campaign_cell(3, (0x000000003183A7B4, 0))
+        with tempfile.TemporaryDirectory() as directory:
+            bridge = self.bridge(Path(directory) / "campaign.json")
+            with self.assertRaisesRegex(ValueError, "live pointer"):
+                bridge.read_campaign(pine)
+            # A poll swallows the fault and leaves state untouched.
+            state = (rb.CampaignSnapshot(1, ()), None, 0)
+            self.assertEqual(bridge._poll_campaign(pine, state), state)
+
+    def test_campaign_manager_guard(self):
+        pine = MemoryPine()
+        pine.memory32[rb.CAMPAIGN_MANAGER_SLOT] = 0x00000000
+        with tempfile.TemporaryDirectory() as directory:
+            bridge = self.bridge(Path(directory) / "campaign.json")
+            with self.assertRaisesRegex(rb.PineError, "campaign manager"):
+                bridge.read_campaign(pine)
+
+    def test_start_campaign_restores_when_live_differs(self):
+        pine = MemoryPine()  # live table empty
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "campaign.json"
+            bridge = self.bridge(path)
+            saved = rb.CampaignSnapshot(
+                1, ((1, (0x0000000300000000, 0x0000000000000001)),)
+            )
+            bridge.campaign_store.save(saved)
+            authoritative = bridge._start_campaign(pine)
+            self.assertIsNotNone(authoritative)
+            self.assertEqual(bridge.read_campaign(pine), saved)
 
 
 if __name__ == "__main__":

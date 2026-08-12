@@ -575,3 +575,247 @@ At the start of the next session:
 The first next-session success signal is not “the shop looked okay.” It is a
 complete paid-refresh transaction showing exact request parameters, one debit,
 one pool mutation, no sentinel inventory entry, and a stable interactive UI.
+
+### C-FINDING: boss/Primus progress is SAVED but not APPLIED on boot (2026-08-12)
+
+Controlled early-Primus win, one-hit debug, autosave allowed to finish, then a
+full RPCS3 cold boot. Result: **chain reverted in-game, but the local save is
+intact and durable across the boot.**
+
+Evidence:
+- Baseline PRG-DATA `dff367f3...` (pre-fight, backups/trackC-pre-primus-20260812-150852).
+- Post-fight PRG-DATA `70348005...` (backups/trackC-post-primus-20260812-152029),
+  44 bytes changed by the autosave.
+- After cold boot + login + return to menu, PRG-DATA is **byte-for-byte identical
+  to the post-fight snapshot** (0 changed bytes, same SHA `70348005...`, mtime
+  unchanged 15:18:12 -> the boot session did not rewrite it). The chain still
+  reverted in the UI. => the loss is in LOAD/APPLY, not SAVE.
+- Victory wire trace (logs/prudp.log after marker line 45785): the ONLY
+  game-service RMC was `Monetization(102) m6` income (+439 silver). No distinct
+  progression/event RMC. Boss completion is NOT server-authoritative on our wire.
+
+Where the fight wrote (section map: sec0@0x0, sec1@0xB4, sec3@0xCB64):
+- Section 1: economy silver@0xB914 updated (expected). NEW nonzero record at
+  **0xCA67 = `3F 00000001 7D0165A1`** (was all-zero) — mission/completion entry +
+  packed-timestamp-looking tail. Near the END of section 1, well after the
+  economy/fame block that already restores.
+- Section 3: NEW writes at 0xCBB5-0xCBB7 and 0xD698 (previously this section was
+  observed all-zero in a roster-only save; a Primus win DOES write it).
+
+Interpretation: economy/fame restore because they sit in the 0x1238 profile
+sub-block that the 0x00068504 patch forces to apply. The campaign/mission
+completion record (0xCA67 in section 1, and/or the section-3 writes) is loaded
+from disk but NOT re-applied to the live campaign manager — the game
+re-initializes the Primus chain to its default instead. This is the section-1
+"applied-but-partial" / section-3 "loaded-but-never-applied" gap, now for
+mission data (binary has `m_missionSaveDataUserContent`).
+
+NEXT (static): map the campaign/mission load+apply path. Determine whether the
+completion state is (a) section 1 outside the applied 0x1238 block, or (b)
+section 3's unapplied buffer 0x329295E0. Then fix the narrowest apply gate,
+analogous to 0x00068504. Do NOT patch individual events to "completed".
+
+### C-STATIC: section-1 apply only pushes 3 scalars; campaign data loaded-not-applied (2026-08-12)
+
+Decompiled the section-1 deserializer `FUN_00068450` (notes/save_load_branch_disasm.txt,
+save_section_dispatch.txt). Structure:
+- `FUN_00748814(handler+8, *src, 0xCA88)` copies the ENTIRE section-1 payload
+  (incl. the 0xCA67 completion record) into the resident handler buffer. So the
+  saved campaign data DOES reach memory on load.
+- 0x15(21)-iteration loop: `FUN_00068060(i)` (reads float @buf+0xac6c+i*4) then
+  `FUN_0006a1dc(i)`. Looks like a per-index (district/arena?) applier. PRIME
+  SUSPECT for the campaign apply that is missing/misrouted.
+- Validity gate `FUN_00067f0c` (reads flag @buf[0xca80]); branch @0x00068504
+  (patched 409E00BC->480000BC forces the ELSE/apply-saved branch). The applied
+  ELSE branch pushes only THREE scalar fields to live state:
+  `FUN_00127fa4(*puVar2)`, `FUN_001dda90(puVar2[1])`, `FUN_00139fa4(puVar2[2])`
+  = the economy/fame/level triple. THAT IS ALL it applies. The campaign/mission
+  completion in the payload tail is never pushed to the live campaign manager.
+
+So the fix is NOT in the 3-field profile apply. Targets:
+1. `FUN_0006a1dc` (the 21-loop applier) — does it read the saved buffer or a
+   default template? Does it cover Primus/mission completion? Find the live
+   campaign/mission manager it writes.
+2. The default-campaign GENERATOR that produces the reverted chain, and its
+   GUARD (choose "apply saved" vs "generate default") — the 0x00068504 analogue.
+3. Map file offset 0xCA67 -> resident buffer base (PTR_DAT_008b9024) offset, to
+   pinpoint the completion record's in-memory location for a live PINE readback.
+Do NOT patch individual events to completed; must support ordered chains/bosses.
+
+### C-STATIC 2: campaign apply function + live managers mapped (2026-08-12)
+
+`FUN_001e08b4(applyCtx, handler+0xacdc)` IS the campaign/mission completion
+applier, called UNCONDITIONALLY in FUN_00068450 during section-1 load (before
+the validity gate). It reads a saved flag array from the resident buffer at
++0xacdc (payload offset ~0xACD4; file ~0xAD94 — the Primus fight DID write bytes
+here: 0xAD36-0xAD87) and, per manager, sets a completion flag=1 wherever the
+saved byte is nonzero. Each block is gated by `if (manager != 0)`.
+
+Live campaign managers (decompiled getters, notes/campaign_managers.txt):
+| # | static slot   | shape   | stride | flag off | flag-array off in save buf |
+|---|---------------|---------|--------|----------|-----------------------------|
+| 1 | 0x008C1B6C    | 512     | 0x158  | +0x154   | +0xacdc +[0..0x1ff]         |
+| 2 | 0x008C1724    | 2x128   | 0x110  | +0x104   | +0xacdc +0x200 / +0x280     |
+| 3 | 0x008C19A8    | 128     | 0x140  | +0x134   | +0xacdc +0x300              |
+| 4 | 0x008C1B00    | 128     | 0x13c  | +0x130   | +0xacdc +0x380              |
+| 5 | 0x008C1A7C    | 6x64    | 0x164  | (consumer FUN_001e3800) | +0xacdc +0x400 +i*0x40+j |
+
+Manager 5 = 6 districts x 64 events = prime Primus/mission completion grid.
+Accessors: m1 FUN_001e697c, m2 FUN_001d3cb8/FUN_001d3a68, m3 FUN_001dd168,
+m4 FUN_001e52dc, m5 FUN_001e2b4c(mgr,i,j) -> entry+j*0x164; consumer FUN_001e3800
+re-invokes FUN_001e2510 apply.
+
+ROOT-CAUSE HYPOTHESIS (needs one live confirmation): the apply runs during
+section-1 load but the manager getters return 0 (collections not yet built) so
+every block is skipped; the game then default-generates the campaign, so the
+saved completion never reaches the live grid. Alt: apply runs but later default
+generation clobbers it. Alt: completion is really in the 0xCA67 tail record, not
+the +0xacdc flag array (the fight wrote both regions).
+
+FIX STRATEGIES:
+(A) Client patch to make FUN_001e08b4's apply effective (re-run after managers
+    init, or move/gate). Needs live root-cause first; risk of the section-1
+    ordering being load-bearing elsewhere.
+(B) PINE companion (like roster_bridge): post-login state 26 (managers built),
+    read saved completion flags from resident buffer OR snapshot live manager
+    flags after fights, and write them into managers 1-5 at the offsets above.
+    Proven, low-risk, no client patch. RECOMMENDED, consistent with the shipped
+    roster/slot-unlock fixes.
+
+NEXT LIVE DIAGNOSTIC (decides A vs B and confirms cause): with the game at the
+menu post-boot (reverted chain), read via PINE:
+  - deref each manager slot (0x008C1B6C etc.) -> nonzero => managers ARE built
+    at menu (so a companion CAN write them);
+  - manager 5 grid entries' completion state for the just-defeated Primus ==
+    not-complete (confirms apply gap);
+  - the resident save buffer flag bytes (base *(0x008b9024)+0xacdc region) ==
+    set (confirms save has the data, apply just didn't land it).
+Requires releasing PINE from the roster bridge (run server --no-roster-bridge)
+or an RPCS3 breakpoint on 0x001e08b4 reading the five manager registers.
+
+### C-CONFIRMED: gap is manager 5 (Primus grid) only; live-verified (2026-08-12)
+
+Live PINE at the menu (server run with --no-roster-bridge to free IPC),
+post-cold-boot reverted state:
+- All 5 manager pointer slots deref non-null (managers built at menu):
+  m1 0x008C1B6C->0x019D68B0, m2 0x008C1724->0x019CE05C, m3 0x008C19A8->0x019D39E4,
+  m4 0x008C1B00->0x019D6740, m5 0x008C1A7C->0x019D4D64. Resident buf 0x008B9024->
+  0x008F28F8 (matches handler).
+- Resident save buffer holds a POPULATED completion flag array at handler+0xacdc
+  (0x008FD5D4, many 0x01). So saved completion IS loaded into memory.
+- Managers 1-4 DID apply: m2 live entries[0],[1] at +0x104 == 1 (matching saved
+  flags at 0x008FD7D4). So the boot apply works for simple-flag managers.
+- Manager 5 grid IS populated at menu: entry-array ptrs mgr5+0x48[0..5] all
+  non-null (0x3182F230 ...). But the Primus chain still reverted.
+
+Manager-5 completion mechanism (notes/m5_completion.txt):
+- FUN_001e2578(mgr5, d, e) = mgr5 + 0xc4 + (d*0x40+e)*0x10  (d<6, e<0x40): the
+  completion CELL address. Completion table = mgr5+0xc4, 6*64 cells * 0x10 B.
+- FUN_001e25b4 writes cell fields {+0:int, +4:float, +8:int, +c:int} and sets
+  DIRTY flag mgr5+0x18c8 = 1 (only if values differ).
+- Apply path FUN_001e3800(entry): cell = lookup(entry+0x15c=d, entry+0x18=e);
+  FUN_001e25b4(mgr5, d, e, local_20). NB the game passes an UNINITIALIZED
+  local_20 here -> completion is marked by the ACT of writing + dirty flag, cell
+  data values are not load-bearing for the mark.
+- FUN_001e08b4's m5 loop reads grid entry via FUN_001e2b4c = *(mgr5+0x48+i*4)+
+  j*0x164 and BREAKS on the first null entry pointer. At section-1 load the grid
+  isn't built yet -> loop breaks immediately -> zero Primus cells marked. At menu
+  the grid is built but the one-shot apply already ran. => selective m5 failure.
+
+Live completion table sample (reverted): mgr5+0xc4 cells mostly zero with a few
+0x01; dirty flag already 1. (Which (d,e) == the beaten Primus not yet indexed.)
+
+### FIX DESIGN (recommended): extend roster_bridge with campaign snapshot/restore
+
+Root cause is timing-specific to manager 5, and everything needed is live at the
+menu (state 26) - exactly where roster_bridge already runs. Cleanest fix: extend
+the existing PINE companion to also snapshot/restore the manager-5 completion
+table, mirroring the roster/slot-unlock pattern:
+- CAPTURE (post-fight, stable across 2 polls like roster): mgr5 = *(0x008C1A7C);
+  read completion table mgr5+0xc4 (0x1800 B) + dirty flag mgr5+0x18c8; store in a
+  new data file (e.g. data/campaign.json) keyed to the profile.
+- RESTORE (post-login state 26, grid built): mgr5 = *(0x008C1A7C); write the
+  saved completion table back + set dirty flag = 1. Verify read-back like roster.
+Snapshot/restore (vs replaying saved grid flags) captures EXACTLY the values the
+game writes, sidestepping the uninitialized-local_20 question. Guard against
+non-stable pointer-looking words (cells appear to hold scalars, but verify no
+heap pointers before persisting). No client patch needed; robust to the exact
+load-order cause. Managers 1-4 already apply, so scope stays m5.
+
+NEXT: (1) capture a live in-session Primus win delta on the m5 completion table
+to confirm exactly which words change per win and that they are boot-stable
+scalars; (2) implement the campaign snapshot/restore in tools/roster_bridge.py
+behind the same build/runtime/pointer guards; (3) cold-boot regression.
+
+### C-DELTA: in-session Primus win writes stable scalars to the m5 cell (2026-08-12)
+
+Live in-session capture (no reboot): snapshot mgr5 completion table district-0
+region (mgr5+0xc4, cells 0..63) before/after beating one Primus. Files in
+captures/trackC-m5-delta/. Real, in-bounds delta (post capture paste was
+truncated at byte 885; ignore cells >~55):
+- cell 1 == (district 0, event 1): field+0x4 0 -> 3, field+0x8 0 -> 1. This is
+  the completion record a win writes. Values are small ints (3, 1) = STABLE
+  scalars, NOT heap pointers -> safe to snapshot/restore.
+- cells 49/50/52: only field3 high byte flipped 256 -> 0 (volatile "new/
+  available"? unrelated to completion) -> EXCLUDE from restore.
+- dirty flag mgr5+0x18c8 stayed 1.
+
+Cell layout (0x10 B at mgr5+0xc4+(d*64+e)*0x10): {+0:int, +4:int(=3 on win),
++8:int(=1 on win), +c:int(volatile hi-byte)}. Completion signature = field+0x4
+and/or field+0x8 nonzero.
+
+=> Companion design validated. Snapshot cells with a completion signature
+(field+0x4/field+0x8 nonzero), stable across two polls (roster_bridge pattern);
+restore those cells + set dirty flag on boot. Exclude all-zero and field3-only
+cells. Persist per-profile in data/campaign.json. Build in tools/roster_bridge.py
+under the same guards; regression across a real cold boot.
+
+### C-IMPLEMENTED: campaign completion companion in roster_bridge.py (2026-08-12)
+
+Extended tools/roster_bridge.py to snapshot/restore the manager-5 Primus
+completion table alongside the roster, sharing the same PINE connection,
+state-26 readiness, and stable-across-2-polls capture discipline.
+- New constants: CAMPAIGN_MANAGER_SLOT 0x008C1A7C, EXPECTED_CAMPAIGN_MANAGER
+  0x019D4D64, table +0xC4, dirty +0x18C8, 6x64 cells * 0x10.
+- CampaignSnapshot (non-empty cells + dirty flag) with build/UUID guard and a
+  HEAP_POINTER band (0x30000000-0x3FFFFFFF) guard that refuses to persist any
+  cell word that looks like a live, non-boot-stable pointer.
+- CampaignStore -> data/campaign.json (atomic write, same style as roster).
+- read_campaign/restore_campaign guard the manager pointer against the expected
+  value; restore writes cells + forces dirty=1, then verifies ONLY the cells it
+  wrote (the game may set additional cells at boot).
+- _start_campaign (first ready: restore saved, else capture initial) and
+  _poll_campaign (capture stable mutation) are best-effort: any campaign fault
+  is logged and disables campaign for the session without affecting the proven
+  roster path. Wired into _run_connection parallel to the roster tracking.
+- run_roster_bridge builds a CampaignStore (SPARTACUS_CAMPAIGN_PROFILE env, added
+  to spartacus_server.configure_environment).
+5 focused unit tests added (round-trip/build guard, restore+verify tolerant of
+game-set cells, pointer guard + poll swallow, manager guard, start restore);
+full suite green (19 tests).
+
+LIVE TEST PLAN (end to end): fresh cold boot -> bridge captures reverted state as
+initial -> beat a Primus in-session (bridge saves the stable mutation to
+campaign.json) -> cold boot -> bridge restores -> Primus stays cleared; confirm
+economy/roster unaffected.
+
+### C-VALIDATED: boss/Primus persistence works across cold boots (2026-08-12)
+
+End-to-end confirmed by the user and roster_bridge.log:
+- boot 1: `created initial campaign profile (19 completion cell(s))` (reverted
+  baseline captured);
+- two Primus wins in-session captured as stable mutations 19 -> 20 -> 21 cells
+  (`saved stable campaign update`);
+- boot 2 (cold): `restored 21 campaign completion cell(s)`; user confirms the
+  defeated Primus stay cleared and successors unlocked, with economy and roster
+  intact. data/campaign.json cell 1 = {field+4=3, field+8=1} (win signature).
+Working state backed up under backups/trackC-working-<ts>/. Track C objective
+(Primus completion persistence) is met via the campaign companion; no client
+patch was required.
+
+Follow-ups (not blockers): (1) README/packaging should list data/campaign.json
+as a third persisted file to back up, and the build should ship it like roster;
+(2) the restored dirty flag reads as 0x01000000 via read32 (round-trips
+faithfully, game accepts it) - harmless, worth a tidy later; (3) broader
+regression: full-game second-playthrough Primus, multiple districts, and a
+death+cold-boot combined run.

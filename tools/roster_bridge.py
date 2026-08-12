@@ -57,6 +57,29 @@ RECORD_WORDS = RECORD_STRIDE // 8
 BACKING_WORDS = BACKING_STRIDE // 8
 MAX_ROSTER = 8
 
+# Campaign (Primus/mission) completion.  Manager 5 (the 6-district x 64-event
+# grid) stores completion in a table of 0x10-byte cells at manager+0xC4, indexed
+# by district*64 + event, with a dirty flag at manager+0x18C8.  The game's
+# section-1 boot apply (FUN_001e08b4) walks this grid but breaks on the first
+# null entry; because the grid is not yet built when section 1 loads, zero
+# Primus cells are marked and the chain reverts.  Managers 1-4 (simple flags)
+# apply correctly, so only this manager is restored here.  A real win writes
+# small integer scalars (e.g. +0x4=3, +0x8=1) into the event's cell.
+CAMPAIGN_MANAGER_SLOT = 0x008C1A7C
+EXPECTED_CAMPAIGN_MANAGER = 0x019D4D64
+CAMPAIGN_TABLE_OFFSET = 0xC4
+CAMPAIGN_DIRTY_OFFSET = 0x18C8
+CAMPAIGN_DISTRICTS = 6
+CAMPAIGN_EVENTS = 64
+CAMPAIGN_CELL_STRIDE = 0x10
+CAMPAIGN_CELL_COUNT = CAMPAIGN_DISTRICTS * CAMPAIGN_EVENTS
+CAMPAIGN_CELL_WORDS = CAMPAIGN_CELL_STRIDE // 8
+# RPCS3 places the game's dynamic heap in this band.  Completion cells hold
+# scalars (counts/ratings/ids); a value here would be a live pointer that is not
+# stable across boots, so a snapshot containing one is refused rather than saved.
+HEAP_POINTER_LOW = 0x30000000
+HEAP_POINTER_HIGH = 0x40000000
+
 
 class PineError(RuntimeError):
     pass
@@ -267,6 +290,107 @@ class RosterStore:
             os.replace(temporary, self.path)
 
 
+def _looks_like_pointer(word: int) -> bool:
+    """True if either 32-bit half of a 64-bit word lands in the RPCS3 heap band."""
+    for half in (word & 0xFFFFFFFF, (word >> 32) & 0xFFFFFFFF):
+        if HEAP_POINTER_LOW <= half < HEAP_POINTER_HIGH:
+            return True
+    return False
+
+
+@dataclass(frozen=True)
+class CampaignSnapshot:
+    """Non-empty manager-5 completion cells plus the table dirty flag."""
+
+    dirty: int
+    cells: tuple[tuple[int, tuple[int, ...]], ...]
+
+    def __post_init__(self):
+        previous = -1
+        for index, words in self.cells:
+            if not 0 <= index < CAMPAIGN_CELL_COUNT:
+                raise ValueError("campaign cell index out of range")
+            if index <= previous:
+                raise ValueError("campaign cells must be sorted and unique")
+            previous = index
+            if len(words) != CAMPAIGN_CELL_WORDS:
+                raise ValueError("invalid campaign cell length")
+            for word in words:
+                if not 0 <= word <= 0xFFFFFFFFFFFFFFFF:
+                    raise ValueError("invalid campaign cell word")
+                if _looks_like_pointer(word):
+                    raise ValueError("campaign cell looks like a live pointer")
+
+    def to_dict(self):
+        return {
+            "schema_version": 1,
+            "game": {
+                "title": EXPECTED_TITLE,
+                "serial": EXPECTED_SERIAL,
+                "game_version": EXPECTED_GAME_VERSION,
+                "uuid": EXPECTED_UUID,
+            },
+            "layout": {
+                "manager_slot": CAMPAIGN_MANAGER_SLOT,
+                "table_offset": CAMPAIGN_TABLE_OFFSET,
+                "cell_stride": CAMPAIGN_CELL_STRIDE,
+                "cell_count": CAMPAIGN_CELL_COUNT,
+            },
+            "dirty": self.dirty,
+            "cells": [
+                {"index": index, "words": _hex_words(words)}
+                for index, words in self.cells
+            ],
+            "captured_at": _datetime.datetime.now().astimezone().isoformat(),
+        }
+
+    @classmethod
+    def from_dict(cls, data):
+        if int(data.get("schema_version", 0)) != 1:
+            raise ValueError("unsupported campaign schema")
+        game = data.get("game", {})
+        if (game.get("serial") != EXPECTED_SERIAL or
+                game.get("game_version") != EXPECTED_GAME_VERSION or
+                game.get("uuid") != EXPECTED_UUID):
+            raise ValueError("campaign belongs to a different game build")
+        layout = data.get("layout", {})
+        if (int(layout.get("cell_stride", 0)) != CAMPAIGN_CELL_STRIDE or
+                int(layout.get("cell_count", 0)) != CAMPAIGN_CELL_COUNT):
+            raise ValueError("unsupported campaign memory layout")
+        dirty = int(data["dirty"])
+        cells = tuple(
+            (int(entry["index"]),
+             _parse_words(entry["words"], CAMPAIGN_CELL_WORDS, "campaign cell"))
+            for entry in data.get("cells", [])
+        )
+        return cls(dirty, cells)
+
+
+class CampaignStore:
+    def __init__(self, path):
+        self.path = Path(path).resolve()
+        self.lock = threading.RLock()
+
+    def load(self):
+        with self.lock:
+            try:
+                with self.path.open("r", encoding="utf-8") as handle:
+                    return CampaignSnapshot.from_dict(json.load(handle))
+            except FileNotFoundError:
+                return None
+
+    def save(self, snapshot):
+        with self.lock:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            temporary = self.path.with_suffix(self.path.suffix + ".tmp")
+            with temporary.open("w", encoding="utf-8", newline="\n") as handle:
+                json.dump(snapshot.to_dict(), handle, indent=2, sort_keys=True)
+                handle.write("\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, self.path)
+
+
 class BridgeLog:
     def __init__(self, path):
         self.path = Path(path).resolve()
@@ -284,7 +408,8 @@ class BridgeLog:
 
 class RosterBridge:
     def __init__(self, store, logger, host="127.0.0.1", port=28012,
-                 poll_seconds=1.0, stable_reads=2, client_factory=PineClient):
+                 poll_seconds=1.0, stable_reads=2, client_factory=PineClient,
+                 campaign_store=None):
         self.store = store
         self.log = logger
         self.host = host
@@ -292,6 +417,7 @@ class RosterBridge:
         self.poll_seconds = max(0.2, float(poll_seconds))
         self.stable_reads = max(2, int(stable_reads))
         self.client_factory = client_factory
+        self.campaign_store = campaign_store
 
     @staticmethod
     def _record_address(slot):
@@ -394,6 +520,122 @@ class RosterBridge:
         if verified != snapshot:
             raise PineError("roster read-back did not match persisted snapshot")
 
+    @staticmethod
+    def _campaign_manager(client):
+        manager = client.read32(CAMPAIGN_MANAGER_SLOT)
+        if manager != EXPECTED_CAMPAIGN_MANAGER:
+            raise PineError(
+                f"campaign manager 0x{manager:08X}, "
+                f"expected 0x{EXPECTED_CAMPAIGN_MANAGER:08X}"
+            )
+        return manager
+
+    def read_campaign(self, client):
+        manager = self._campaign_manager(client)
+        base = manager + CAMPAIGN_TABLE_OFFSET
+        cells = []
+        for index in range(CAMPAIGN_CELL_COUNT):
+            address = base + index * CAMPAIGN_CELL_STRIDE
+            words = tuple(
+                client.read64(address + word * 8)
+                for word in range(CAMPAIGN_CELL_WORDS)
+            )
+            if any(words):
+                cells.append((index, words))
+        dirty = client.read32(manager + CAMPAIGN_DIRTY_OFFSET)
+        # CampaignSnapshot enforces the pointer guard; an unstable heap pointer
+        # in a cell raises here and simply skips this capture cycle.
+        return CampaignSnapshot(dirty, tuple(cells))
+
+    def restore_campaign(self, client, snapshot):
+        manager = self._campaign_manager(client)
+        base = manager + CAMPAIGN_TABLE_OFFSET
+        for index, words in snapshot.cells:
+            address = base + index * CAMPAIGN_CELL_STRIDE
+            for word_index, word in enumerate(words):
+                client.write64(address + word_index * 8, word)
+        client.write32(manager + CAMPAIGN_DIRTY_OFFSET, snapshot.dirty or 1)
+
+        # Verify only the cells we wrote; the game may set additional cells of
+        # its own at boot, so a whole-table compare would spuriously fail.
+        for index, words in snapshot.cells:
+            address = base + index * CAMPAIGN_CELL_STRIDE
+            got = tuple(
+                client.read64(address + word * 8)
+                for word in range(CAMPAIGN_CELL_WORDS)
+            )
+            if got != words:
+                raise PineError(f"campaign cell {index} read-back mismatch")
+
+    def _start_campaign(self, client):
+        """First-ready campaign restore/capture. Best-effort; roster is primary.
+
+        Returns the authoritative snapshot, or None to disable campaign
+        persistence for this session on any campaign-specific fault.
+        """
+        if self.campaign_store is None:
+            return None
+        try:
+            saved = self.campaign_store.load()
+            if saved is None:
+                authoritative = self.read_campaign(client)
+                self.campaign_store.save(authoritative)
+                self.log.write(
+                    f"created initial campaign profile "
+                    f"({len(authoritative.cells)} completion cell(s))"
+                )
+                return authoritative
+            current = self.read_campaign(client)
+            if current == saved:
+                self.log.write(
+                    f"live campaign already matches saved "
+                    f"{len(saved.cells)} completion cell(s)"
+                )
+                return saved
+            self.restore_campaign(client, saved)
+            # Re-read: the game may also set cells of its own at boot, so the
+            # authoritative live state is the union, not just what we wrote.
+            authoritative = self.read_campaign(client)
+            self.log.write(
+                f"restored {len(saved.cells)} campaign completion cell(s)"
+            )
+            return authoritative
+        except (PineError, ValueError) as error:
+            self.log.write(
+                f"campaign persistence unavailable this session ({error})"
+            )
+            return None
+
+    def _poll_campaign(self, client, state):
+        """Capture a campaign mutation that is stable across `stable_reads`.
+
+        `state` and the return value are (authoritative, pending, pending_reads).
+        """
+        authoritative, pending, pending_reads = state
+        if self.campaign_store is None or authoritative is None:
+            return state
+        try:
+            candidate = self.read_campaign(client)
+        except (PineError, ValueError):
+            return state  # transient (e.g. mid-write); retry next poll
+        if candidate == authoritative:
+            return (authoritative, None, 0)
+        if candidate == pending:
+            pending_reads += 1
+            if pending_reads >= self.stable_reads:
+                try:
+                    self.campaign_store.save(candidate)
+                except (OSError, ValueError) as error:
+                    self.log.write(f"campaign save failed ({error})")
+                    return (authoritative, None, 0)
+                self.log.write(
+                    f"saved stable campaign update "
+                    f"({len(candidate.cells)} completion cell(s))"
+                )
+                return (candidate, None, 0)
+            return (authoritative, pending, pending_reads)
+        return (authoritative, candidate, 1)
+
     def _wait(self, stop_event, seconds=None):
         return stop_event.wait(self.poll_seconds if seconds is None else seconds)
 
@@ -408,6 +650,7 @@ class RosterBridge:
         authoritative = None
         pending = None
         pending_reads = 0
+        campaign_state = (None, None, 0)
 
         while not stop_event.is_set():
             if not self._ready(client):
@@ -418,6 +661,7 @@ class RosterBridge:
                 authoritative = None
                 pending = None
                 pending_reads = 0
+                campaign_state = (None, None, 0)
                 if self._wait(stop_event):
                     return
                 continue
@@ -441,6 +685,7 @@ class RosterBridge:
                     authoritative = self.read_snapshot(client)
                     self.store.save(authoritative)
                     self.log.write(f"created initial {authoritative.count}-gladiator roster profile")
+                campaign_state = (self._start_campaign(client), None, 0)
                 session_active = True
                 pending = None
                 pending_reads = 0
@@ -463,6 +708,7 @@ class RosterBridge:
             else:
                 pending = candidate
                 pending_reads = 1
+            campaign_state = self._poll_campaign(client, campaign_state)
             if self._wait(stop_event):
                 return
 
@@ -491,7 +737,8 @@ class RosterBridge:
 
 
 def run_roster_bridge(stop_event, ready_event=None, host="127.0.0.1", port=28012,
-                      profile_path=None, log_path=None, poll_seconds=1.0):
+                      profile_path=None, log_path=None, poll_seconds=1.0,
+                      campaign_path=None):
     base = Path(__file__).resolve().parents[1]
     profile_path = profile_path or os.environ.get(
         "SPARTACUS_ROSTER_PROFILE", str(base / "data" / "roster.json")
@@ -499,7 +746,11 @@ def run_roster_bridge(stop_event, ready_event=None, host="127.0.0.1", port=28012
     log_path = log_path or os.environ.get(
         "SPARTACUS_ROSTER_LOG", str(base / "logs" / "roster_bridge.log")
     )
+    campaign_path = campaign_path or os.environ.get(
+        "SPARTACUS_CAMPAIGN_PROFILE", str(base / "data" / "campaign.json")
+    )
     bridge = RosterBridge(
-        RosterStore(profile_path), BridgeLog(log_path), host, port, poll_seconds
+        RosterStore(profile_path), BridgeLog(log_path), host, port, poll_seconds,
+        campaign_store=CampaignStore(campaign_path),
     )
     bridge.run(stop_event, ready_event)
