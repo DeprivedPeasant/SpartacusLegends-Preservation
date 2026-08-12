@@ -8,6 +8,11 @@ restores locally saved fame, currency, levels, purchases, and fight progress
 across cold boots. The compatibility patch also completes the post-fight
 gladiator-recruitment store refresh, which otherwise retries indefinitely.
 
+Shop actions the retired service no longer answers, such as replacing a
+gladiator's perk or buying Ludus execution boosts, previously left the game
+waiting forever on a loading spinner. The server now answers every shop request,
+so an unimplemented feature reports a failure instead of locking the game up.
+
 Tested configuration:
 
 - Game: Spartacus Legends, NPUB30746 version 01.00
@@ -141,4 +146,6 @@ To build the standalone Windows release:
 powershell -ExecutionPolicy Bypass -File packaging\build_release.ps1
 ```
 
-The build script creates `dist\SpartacusLegends-Preservation-v0.3.5.zip`.
+The build script creates `dist\SpartacusLegends-Preservation-v<version>.zip`,
+where `<version>` is read from `tools\_version.py` (the single source of truth
+for the version).

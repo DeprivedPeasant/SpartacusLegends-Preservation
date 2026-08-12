@@ -155,6 +155,39 @@ PROTO_AUTHENTICATION = 0x0A
 PROTO_SECURE = 0x0B          # SecureConnectionProtocol
 PROTO_NOTIFICATION = 0x0E    # GlobalNotificationEventProtocol (live-confirmed)
 PROTO_MONETIZATION = 102
+
+# Response shapes recovered from the client's OWN response parser (parser
+# 0x00018C4C, 15 methods - see notes/05-monetization-method-map.md).  Methods
+# that share a parser case body share a response shape, which is why only a
+# handful of distinct shapes cover all 15 methods.  Verified against every
+# live-validated method: m3 list, m6/m11 two-u32, m7 two-u32 + 16-byte receipt,
+# m12 void.  Used as the informed default for methods we do not implement yet,
+# so an unhandled shop call is answered in the shape its parser expects.
+P102_METHOD_SHAPES = {
+    # case body 0x00018E24 - two u32 (the gold/silver balance pair), shared with
+    # the implemented m6/m11/m13.
+    5: "balances",
+    # case body 0x00018EBC - exactly one u32, read into output slot 0 (or
+    # consumed and discarded when the caller passes no slot).  Live-traced
+    # (2026-08-12): that u32 is the UPDATED GOLD BALANCE, not a status code.
+    # m9 follows an m7 purchase carrying the same item id (execution boosts),
+    # and m15 is the perk replacement <gladiator, perk, 2>; answering either
+    # with 0 set the player's on-screen gold to zero.  Return the authoritative
+    # balance instead.  Nothing is debited here: m9's cost was already taken by
+    # the preceding m7, and m15's third parameter is not confirmed to be a cost
+    # (it lacks the -1 "unused currency" sentinel that m7/m11/m13 costs carry).
+    9: "gold",
+    10: "gold",
+    14: "gold",
+    15: "gold",
+    # case body 0x00019010 - a list built with the same list decoder as m3
+    # (0x004CEAC0); a u32 count of 0 is a structurally correct empty list.
+    2: "zero",
+    # Methods 1 (0x004CF094), 4 (0x00015D88) and 8 (0x004CE5B8 + u64) decode
+    # structured objects whose layout is not yet recovered.  They keep the
+    # default receipt so the reply is never shorter than the parser expects;
+    # capture them live before implementing.
+}
 STORE_REFRESH_SENTINEL = 99999
 PROTO_NAMES = {0x0A: "TicketGranting", 0x0B: "SecureConnection",
                0x0E: "GlobalNotificationEvent", 102: "Monetization"}
@@ -568,6 +601,19 @@ def build_rmc_response(protocol: int, call_id: int, method_id: int,
     return struct.pack("<I", len(inner)) + inner
 
 
+def build_rmc_error(protocol: int, call_id: int, error_code: int) -> bytes:
+    """Build a failing RMC response.
+
+    The Quazal failure envelope carries the error code in place of the method
+    id and body.  This layout follows the documented Quazal/NEX convention and
+    is NOT yet confirmed against this title, so it is only reachable through an
+    explicit fallback-shape override, never by default.
+    """
+    inner = bytes([protocol]) + b"\x00"                    # proto, failure
+    inner += struct.pack("<II", error_code, call_id)
+    return struct.pack("<I", len(inner)) + inner
+
+
 def build_rmc_request(protocol: int, call_id: int, method_id: int,
                       params: bytes) -> bytes:
     """Build a server-initiated RMC request (high bit set on protocol)."""
@@ -795,6 +841,7 @@ def main(port=None, stop_event=None, ready_event=None, host="0.0.0.0"):
                 log("-> DATA|ACK")
 
                 resp_body = None
+                resp_error = None
                 label = None
                 if rmc and rmc["is_request"] \
                         and rmc["protocol"] == PROTO_SECURE \
@@ -1038,6 +1085,108 @@ def main(port=None, stop_event=None, ready_event=None, host="0.0.0.0"):
                         log(f"   *** Recruit gladiator={gladiator_id} unk={unk} "
                             f"gold_cost={gold_cost} silver_cost={silver_cost} "
                             f"shape={shape} -> balances gold={gold} silver={silver} ***")
+                    elif rmc["method_id"] == 15:    # Replace gladiator perk
+                        # Live-traced (2026-08-12): the Ludus perk swap sends
+                        #   u32 gladiator_id, u32 perk_id, i32 gold_cost
+                        # Two swaps of DIFFERENT perks (100061, 100002) on the
+                        # same gladiator both carried 2, matching the 2-gold
+                        # price the player is shown, and neither client nor
+                        # server debited it - the swap was free.  Its parser
+                        # case body (0x00018EBC) returns a single u32 that the
+                        # client applies as the gold balance, so answer with the
+                        # post-debit balance.
+                        #   P102M15_DEBIT=0  disables the debit if the third
+                        #                    parameter turns out not to be a cost
+                        try:
+                            gladiator_id, perk_id, gold_cost = \
+                                struct.unpack_from("<IIi", rmc["params"], 0)
+                        except struct.error:
+                            gladiator_id, perk_id, gold_cost = 0, 0, -1
+                        debit = (gold_cost if gold_cost >= 0 else 0)
+                        if os.environ.get("P102M15_DEBIT", "1") == "0":
+                            debit = 0
+                        gold, silver = ECONOMY.add_income(-debit, 0)
+                        resp_body = struct.pack("<I", gold)
+                        label = "MONETIZATION_PERK_SWAP"
+                        log(f"   *** Perk swap gladiator={gladiator_id} "
+                            f"perk={perk_id} gold_cost={gold_cost} "
+                            f"debited={debit} -> gold={gold} ***")
+                    else:
+                        # UNHANDLED shop method.  Protocol 102 is the one
+                        # protocol excluded from the GENERIC_ACK fallback below,
+                        # so before this branch an unrecognised method received a
+                        # bare transport ACK and no RMC reply at all: the client
+                        # blocks forever on its async job (the infinite shop
+                        # spinner, escapable only by killing RPCS3).  Always
+                        # answer with a well-formed response so an unimplemented
+                        # shop feature degrades to "that action failed" instead
+                        # of hanging, and log enough to implement it properly.
+                        #
+                        # Default shape is the proven m7/m13 receipt because it
+                        # is a superset of the m6/m11 balance pair: a client
+                        # expecting only <gold, silver> reads those two fields
+                        # and ignores the trailing receipt.  Nothing is debited -
+                        # which params are costs is unknown for an unidentified
+                        # method, and a wrong debit corrupts the profile.
+                        # Iterate without editing code:
+                        #   P102M17_SHAPE=balances   (this method only)
+                        #   P102_FALLBACK_SHAPE=...  (every unknown method)
+                        # shapes: receipt | balances | empty | zero | result |
+                        #         error[:code]
+                        method = rmc["method_id"]
+                        # Precedence: per-method override, then global override,
+                        # then the shape recovered from the client's parser,
+                        # then the receipt (superset of the balance pair).
+                        shape = os.environ.get(
+                            f"P102M{method}_SHAPE",
+                            os.environ.get(
+                                "P102_FALLBACK_SHAPE",
+                                P102_METHOD_SHAPES.get(method, "receipt"),
+                            ),
+                        )
+                        raw = rmc["params"]
+                        words = list(struct.unpack_from(
+                            f"<{len(raw) // 4}I", raw, 0
+                        )) if len(raw) >= 4 else []
+                        # Costs are i32 and use -1 as the "not this currency"
+                        # sentinel, so show a signed view too - that is what
+                        # identified the gold/silver fields of m11 and m13.
+                        signed = [w - 0x100000000 if w > 0x7FFFFFFF else w
+                                  for w in words]
+                        with ECONOMY.lock:
+                            gold = ECONOMY.data["gold"]
+                            silver = ECONOMY.data["silver"]
+                        if shape == "balances":
+                            resp_body = struct.pack("<II", gold, silver)
+                        elif shape == "gold":
+                            resp_body = struct.pack("<I", gold)
+                        elif shape == "silver":
+                            resp_body = struct.pack("<I", silver)
+                        elif shape == "empty":
+                            resp_body = b""
+                        elif shape == "zero":
+                            resp_body = struct.pack("<I", 0)
+                        elif shape == "result":
+                            resp_body = struct.pack("<I", 0x00010001)
+                        elif shape.startswith("error"):
+                            _, _, code = shape.partition(":")
+                            resp_error = int(code, 0) if code else 0x80010001
+                            resp_body = b""
+                        else:  # "receipt"
+                            # Echo the first parameter as the transaction id;
+                            # m7 and m13 both carry the item/gladiator id first.
+                            resp_body = encode_purchase_result(
+                                gold, silver, words[0] if words else 0,
+                                transaction_time=encode_qdatetime(),
+                                quantity=1,
+                            )
+                        label = f"MONETIZATION_UNHANDLED(m{method})"
+                        log(f"   *** UNHANDLED Monetization method={method} "
+                            f"call={rmc['call_id']} params={raw.hex()} "
+                            f"({len(raw)}B) u32={words} i32={signed} ***")
+                        log(f"   *** replying [{shape}] to avoid a client hang; "
+                            f"no currency debited (balances gold={gold} "
+                            f"silver={silver}). Please report this method. ***")
 
                 elif rmc and rmc["is_request"] and GENERIC_ACK:
                     # Probe for protocols we haven't reversed yet. Every
@@ -1136,9 +1285,13 @@ def main(port=None, stop_event=None, ready_event=None, host="0.0.0.0"):
                             f"arm your breakpoint NOW <<<")
                         time.sleep(dsecs)
                         log("   >>> delay over, sending <<<")
-                    rmc_msg = build_rmc_response(rmc["protocol"],
-                                                 rmc["call_id"],
-                                                 rmc["method_id"], resp_body)
+                    rmc_msg = (
+                        build_rmc_error(rmc["protocol"], rmc["call_id"],
+                                        resp_error)
+                        if resp_error is not None else
+                        build_rmc_response(rmc["protocol"], rmc["call_id"],
+                                           rmc["method_id"], resp_body)
+                    )
                     pkt = build(src, dst, TYPE_DATA, FLAG_NEED_ACK, sess,
                                 seq + 1,
                                 signature=client_conn_sig.get(addr, 0),
