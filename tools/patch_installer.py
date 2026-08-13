@@ -18,8 +18,10 @@ GAME_VERSION = "01.00"
 IPC_PORT = "28012"
 IP_SWAP = "onlineconfigservice.ubi.com=127.0.0.1"
 COMPATIBILITY_PATCH = "Spartacus Legends - Server emulator compatibility"
+MATCHMAKING_PATCH = "Spartacus Legends - Online matchmaking compatibility (experimental)"
 PROJECT_PATCHES = (
     f'  "{COMPATIBILITY_PATCH}":',
+    f'  "{MATCHMAKING_PATCH}":',
     '  "Spartacus Legends - One-hit fight debug cheat (optional)":',
     '  "Spartacus Legends - Skip startup logo screens (optional)":',
 )

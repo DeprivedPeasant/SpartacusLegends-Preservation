@@ -43,10 +43,18 @@ def running_from_temp(base_dir: Path) -> bool:
     return False
 
 
-def configure_environment(log_dir: Path, secure_port: int) -> None:
-    """Set the exact response matrix validated by the preservation tests."""
+def configure_environment(log_dir: Path, secure_port: int,
+                          advertise_host: str = "127.0.0.1") -> None:
+    """Set the exact response matrix validated by the preservation tests.
+
+    advertise_host reaches the Quazal server through RDV_HOST, which it reads at
+    import time to build the connection string that redirects the client from
+    the auth server to the secure one. It has to agree with the address the
+    online-config response hands out, or the client is sent somewhere it cannot
+    reach and login stalls until it times out.
+    """
     defaults = {
-        "RDV_HOST": "127.0.0.1",
+        "RDV_HOST": advertise_host,
         "RDV_ADVERTISE_PORT": str(secure_port),
         "RDV_SCHEME": "prudps",
         "GENERIC_ACK": "1",
@@ -118,6 +126,12 @@ def wait_for_services(ready_events, failures, timeout=5.0):
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--advertise-host", default=None,
+                        help="address the online-config response hands the game "
+                             "for the Quazal endpoint. Defaults to 127.0.0.1, "
+                             "which is correct unless RPCS3's 'Bind address' is "
+                             "set - a bound game socket cannot reach loopback, "
+                             "so pair --host 0.0.0.0 with the bind address here")
     parser.add_argument("--http-port", type=int, default=DEFAULT_HTTP_PORT)
     parser.add_argument("--auth-port", type=int, default=DEFAULT_AUTH_PORT)
     parser.add_argument("--secure-port", type=int, default=DEFAULT_SECURE_PORT)
@@ -151,7 +165,13 @@ def main() -> int:
     base_dir = application_dir()
     log_dir = base_dir / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
-    configure_environment(log_dir, args.secure_port)
+
+    # The game connects to whatever address these responses name, so this is an
+    # advertised address and not a bind address - they only coincide in the
+    # default loopback setup. Both the online-config response and the Quazal
+    # auth->secure redirect must carry it.
+    advertise_host = args.advertise_host or "127.0.0.1"
+    configure_environment(log_dir, args.secure_port, advertise_host)
 
     print(f"Spartacus Legends Preservation Server v{VERSION}")
     print(f"Logs: {log_dir}")
@@ -194,7 +214,7 @@ def main() -> int:
 
     components = [
         ("OnlineConfig", spartacus_onlineconfig.serve,
-         (args.host, args.http_port, "127.0.0.1", args.auth_port,
+         (args.host, args.http_port, advertise_host, args.auth_port,
           log_dir / "online_config.log", stop_event, ready_http)),
         ("Quazal auth", prudp_server.main,
          (args.auth_port, stop_event, ready_auth, args.host)),
@@ -234,7 +254,7 @@ def main() -> int:
         return 3
 
     print("\nAll services are ready.")
-    print("RPCS3 IP swap: onlineconfigservice.ubi.com=127.0.0.1")
+    print(f"RPCS3 IP swap: onlineconfigservice.ubi.com={advertise_host}")
     print("Enable patch: Spartacus Legends - Server emulator compatibility")
     if not args.no_roster_bridge:
         print(f"Roster persistence: RPCS3 IPC must be enabled on port {args.pine_port}")
