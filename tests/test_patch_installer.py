@@ -79,6 +79,8 @@ PPU-81471d050c14f4d20b4027686f8b571dafd32394:
         self.assertIn('  "Other patch":', merged)
         self.assertIn('  "Existing compatible patch":', merged)
         self.assertEqual(merged.count('  "Spartacus Legends - Server emulator compatibility":'), 1)
+        self.assertEqual(merged.count(
+            '  "Spartacus Legends - Online matchmaking compatibility (experimental)":'), 1)
         self.assertIn('Patch Version: "4.0"', merged)
 
     def test_install_creates_backup_and_preserves_custom_patch(self):

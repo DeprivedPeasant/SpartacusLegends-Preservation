@@ -1,4 +1,5 @@
 import sys
+import os
 import tempfile
 import unittest
 import unittest.mock
@@ -8,7 +9,7 @@ from pathlib import Path
 # executable does.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 
-from tools.spartacus_server import running_from_temp
+from tools.spartacus_server import configure_environment, running_from_temp
 
 
 class TempFolderGuardTests(unittest.TestCase):
@@ -29,6 +30,15 @@ class TempFolderGuardTests(unittest.TestCase):
             with unittest.mock.patch.dict(
                     "os.environ", {"TEMP": str(temp_root), "TMP": str(temp_root)}):
                 self.assertTrue(running_from_temp(base.resolve()))
+
+
+class AdvertisedHostTests(unittest.TestCase):
+    def test_lan_advertised_host_reaches_quazal_redirect_environment(self):
+        with tempfile.TemporaryDirectory() as temp:
+            with unittest.mock.patch.dict(os.environ, {}, clear=True):
+                configure_environment(Path(temp), 21001, "192.168.0.153")
+                self.assertEqual(os.environ["RDV_HOST"], "192.168.0.153")
+                self.assertEqual(os.environ["RDV_ADVERTISE_PORT"], "21001")
 
 
 if __name__ == "__main__":

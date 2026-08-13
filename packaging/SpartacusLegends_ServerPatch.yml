@@ -20,6 +20,27 @@ PPU-81471d050c14f4d20b4027686f8b571dafd32394:
       - [ be32, 0x00068504, 0x480000BC ] # apply the locally saved profile
       - [ be32, 0x00174A9C, 0x98090022 ] # accept recruit-pool refresh completion
 
+  "Spartacus Legends - Online matchmaking compatibility (experimental)":
+    Games:
+      "Spartacus Legends":
+        NPUB30746: [ 01.00 ]
+    Author: "Spartacus Legends preservation project"
+    Notes: >
+      OPTIONAL EXPERIMENTAL PATCH. Enables RPCN matchmaking for user testing.
+      Prevents an RPCS3 scheduling race from tearing down Matching2 between an
+      empty search and the game's host retry, then routes the final fighter-data
+      message over the virtual port RPCS3 delivers correctly. Verified with
+      repeated Ready Room and Quickmatch games, correct post-match results,
+      return to menu, and working RPCN leaderboard updates. Leave disabled if
+      you do not want to test online matchmaking. Clear the game's PPU cache
+      and cold-boot after changing this patch.
+    Patch Version: "0.3-test"
+    Patch:
+      - [ be32, 0x001ACB80, 0x60000000 ] # host retry: do not tear down online layer
+      - [ be32, 0x001AC9E4, 0x60000000 ] # search retry: do not tear down online layer
+      - [ be32, 0x001B8E8C, 0x38A00001 ] # direct-peer type-11 send via vport 1
+      - [ be32, 0x001B8F0C, 0x38A00001 ] # broadcast type-11 send via vport 1
+
   "Spartacus Legends - One-hit fight debug cheat (optional)":
     Games:
       "Spartacus Legends":

@@ -165,6 +165,16 @@ publisher/developer video screens while retaining the legal notices and the
 game's normal title transition. Enable it in RPCS3's patch manager if desired;
 after changing its state, remove the game's PPU cache and cold-boot once.
 
+**Spartacus Legends - Online matchmaking compatibility (experimental)** enables
+RPCN matchmaking for user testing. It has completed repeated Ready Room and
+Quickmatch games between two RPCN accounts, including fighter exchange, combat,
+correct post-match results, return to the menu, and leaderboard updates. It is
+still optional while cancellation, disconnect, and wider network conditions are
+tested. Both players must use NPUB30746 01.00, enable this patch, clear the
+game's PPU cache, and cold-boot. Normal RPCN accounts are used; do not share
+credentials. If a match fails, report which client hosted, the queue type, and
+both RPCS3 logs.
+
 ## What the server runs
 
 - TCP 80: Ubisoft OnlineConfigService replacement
@@ -175,6 +185,12 @@ after changing its state, remove the game's PPU cache and cold-boot once.
 
 All listeners bind to `127.0.0.1` by default. Logs are written to the `logs`
 folder beside the executable.
+
+Researchers running multiple RPCS3 clients through a LAN address can start the
+server with `--host 0.0.0.0 --advertise-host <server-LAN-IP>`. The advertised
+address is placed in both the OnlineConfig response and the Quazal auth redirect;
+using only `--host` leaves clients redirected to loopback. Ordinary single-client
+setups should keep the default loopback configuration.
 
 ## Troubleshooting
 
