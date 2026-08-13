@@ -28,6 +28,21 @@ def application_dir() -> Path:
     return Path(__file__).resolve().parents[1]
 
 
+def running_from_temp(base_dir: Path) -> bool:
+    """Detect the exe being run from inside the ZIP (Windows unpacks to %TEMP%)."""
+    for variable in ("TEMP", "TMP"):
+        value = os.environ.get(variable)
+        if not value:
+            continue
+        try:
+            temp_dir = Path(value).resolve()
+        except OSError:
+            continue
+        if base_dir == temp_dir or temp_dir in base_dir.parents:
+            return True
+    return False
+
+
 def configure_environment(log_dir: Path, secure_port: int) -> None:
     """Set the exact response matrix validated by the preservation tests."""
     defaults = {
@@ -128,6 +143,10 @@ def maybe_pause(no_wait: bool) -> None:
 
 
 def main() -> int:
+    # Keep this window readable when a user pipes it into a log file: unbuffered
+    # stderr would otherwise overtake the buffered startup messages.
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(line_buffering=True)
     args = parse_args()
     base_dir = application_dir()
     log_dir = base_dir / "logs"
@@ -136,6 +155,14 @@ def main() -> int:
 
     print(f"Spartacus Legends Preservation Server v{VERSION}")
     print(f"Logs: {log_dir}")
+    if running_from_temp(base_dir):
+        print("\nWARNING: this server is running from a temporary folder:")
+        print(f"  {base_dir}")
+        print("That happens when the release is started from inside the ZIP. Windows "
+              "deletes this folder, taking your saved profile, roster and campaign "
+              "progress with it.")
+        print("Close this window, extract the ZIP to a real folder, and run the "
+              "extracted SpartacusLegendsServer.exe instead.\n")
     try:
         reservations = reserve_ports(
             args.host, args.http_port, args.auth_port, args.secure_port

@@ -21,67 +21,134 @@ Tested configuration:
 
 No game files or decrypted executable content are included.
 
-## Quick setup
+## Before you start
 
-Before starting, install the **USA version of Spartacus Legends, version
-01.00 (`NPUB30746`)**, in RPCS3. Other regions and game versions are not
-supported by the supplied compatibility patch. You also need an **RPCN
-account configured and signed in through RPCS3**.
+You need all four of these. The setup cannot work without them:
 
-1. Extract the release ZIP and run `SpartacusLegendsServer.exe`. Leave its
-   window open while playing. It should report that TCP 80 and UDP 21000/21001
-   are ready.
-2. Close RPCS3, then run `SpartacusLegendsPatchInstaller.exe` and either drag
-   your RPCS3 folder onto it or paste that folder's path. Confirm when prompted.
-   The installer merges the three supplied patches, applies the NPUB30746
-   network configuration, enables the required compatibility patch and IPC
-   server, and clears the game's PPU cache. Existing configuration files are
-   backed up and unrelated settings and optional patch choices are retained.
+1. **The USA release of Spartacus Legends, version 01.00 (`NPUB30746`)**,
+   installed in RPCS3. Other regions and versions are not supported: the patch
+   matches one exact executable, so a different build silently goes unpatched.
+   Check the **Version** column in RPCS3's game list — it must read `01.00`. If
+   it reads anything else, the game's update data has to be removed.
+2. **An RPCN account**, created and signed in through RPCS3 under
+   **Manage > RPCN > RPCN Account**.
+3. **RPCS3 closed** while you run the installer. RPCS3 rewrites its own
+   configuration files when it exits, which would undo the setup.
+4. **The release ZIP extracted to a real folder**, for example
+   `C:\Games\SpartacusLegends-Preservation`. Do not run the programs from
+   inside the ZIP: Windows unpacks them to a temporary folder and later deletes
+   it, taking your saved profile, roster and campaign progress with it.
 
-   Manual installation remains available if the updater cannot locate your
-   RPCS3 folder:
+Both programs are unsigned, so Windows SmartScreen shows
+**"Windows protected your PC"** the first time you run each one. Choose
+**More info > Run anyway**. Some antivirus tools also flag them, which is a
+known false positive for this kind of packaged Python program. Each release
+publishes the ZIP's SHA-256 in its release notes if you want to check the
+download first.
 
-   - Open `SpartacusLegends_ServerPatch.yml` in a text editor and save a copy
-     named exactly `imported_patch.yml` in `<RPCS3 folder>\patches\`. On
-     Windows, choose **All files (*.*)** when saving so the editor does not add
-     a `.txt` extension.
-   - If `imported_patch.yml` already exists, do not overwrite it. Copy the
-     `PPU-81471d050c14f4d20b4027686f8b571dafd32394` section from the supplied
-     file into the existing file beneath its single `Version: 1.2` header.
-   - Restart RPCS3, open **Manage > Game Patches**, enable
-     **Spartacus Legends - Server emulator compatibility** for NPUB30746
-     01.00, and click **Save**. The separately listed optional patches can
-     remain disabled unless wanted.
-3. If performing a manual installation, right-click the game and open its
-   custom configuration. Under **Network**, set:
+## Setup
 
-   - **Network Status:** Connected
-   - **PSN Status:** RPCN
-   - **IP swap list:**
+Run these in order. Each step says what you should see.
 
-     `onlineconfigservice.ubi.com=127.0.0.1`
+**1. Close RPCS3.**
 
-   In RPCS3, open **Manage > Network Services > IPC**, enable **Enable IPC
-   Server**, and leave its port at `28012`. The preservation server uses this
-   local PINE connection to preserve complete gladiator rosters and their
-   per-gladiator equipment across cold boots.
+**2. Run `SpartacusLegendsPatchInstaller.exe`.** Either drag your RPCS3 folder
+onto it, or double-click it and paste the path to that folder (the one
+containing `rpcs3.exe`), then confirm.
 
-4. For a manual installation, right-click the game and choose **Remove > PPU
-   Cache** once after installing or changing the patch. This prevents RPCS3
-   from reusing LLVM code compiled from an older patch.
-5. Cold-boot the game and log in normally. The game should display **Saving**
-   and continue to the main menu.
+The installer merges the three supplied patches into RPCS3's imported patches,
+applies the NPUB30746 network configuration, enables the required compatibility
+patch, enables the IPC server, and clears the game's PPU cache. Existing
+configuration files are backed up, and unrelated settings and optional patch
+choices are kept.
+
+It then re-reads RPCS3's own files and prints the result. Every line must
+read `[OK]`, ending in:
+
+```
+SETUP OK. Start SpartacusLegendsServer.exe, then cold-boot the game in RPCS3.
+```
+
+A line marked `[XX]` is something the installer failed to write; a line marked
+`[!!]` is something you need to fix yourself, such as an unsupported game
+version or a missing RPCN account. Fix those before continuing — the game
+cannot reach the main menu otherwise. You can re-check at any time by running
+the installer again with `--verify`, which only reads:
+
+```powershell
+SpartacusLegendsPatchInstaller.exe "C:\path\to\RPCS3" --verify
+```
+
+**3. Run `SpartacusLegendsServer.exe` and leave its window open.** It should
+report:
+
+```
+Port check passed: TCP 80, UDP 21000, UDP 21001
+All services are ready.
+```
+
+Keep this window open for the whole play session. Press Ctrl+C to shut all
+listeners down cleanly when you are finished.
+
+**4. Start RPCS3 and cold-boot the game.** Right-click Spartacus Legends and
+choose **Boot with default configuration** or simply start it — do not resume a
+savestate. Log in normally. The game displays **Saving** and continues to the
+main menu.
+
+To confirm the patch actually applied, open RPCS3's log after booting and look
+for the line beginning `PPU executable hash:`. It must read
+`PPU-81471d050c14f4d20b4027686f8b571dafd32394`. A different hash means the
+game build is not the supported one and no patch will apply to it.
+
+## Manual setup
+
+Use this only if the installer cannot find your RPCS3 folder. It performs the
+same four changes by hand.
+
+- Open `SpartacusLegends_ServerPatch.yml` in a text editor and save a copy
+  named exactly `imported_patch.yml` in `<RPCS3 folder>\patches\`. On Windows,
+  choose **All files (\*.\*)** when saving so the editor does not add a `.txt`
+  extension.
+- If `imported_patch.yml` already exists, do not overwrite it. Copy the
+  `PPU-81471d050c14f4d20b4027686f8b571dafd32394` section from the supplied file
+  into the existing file beneath its single `Version: 1.2` header.
+- Restart RPCS3, open **Manage > Game Patches**, enable **Spartacus Legends -
+  Server emulator compatibility** for NPUB30746 01.00, and click **Save**. The
+  separately listed optional patches can remain disabled unless wanted.
+- Right-click the game, open its custom configuration, and under **Network**
+  set:
+
+  - **Network Status:** Connected
+  - **PSN Status:** RPCN
+  - **IP swap list:** `onlineconfigservice.ubi.com=127.0.0.1`
+
+- Open **Manage > Network Services > IPC**, enable **Enable IPC Server**, and
+  leave its port at `28012`. The preservation server uses this local PINE
+  connection to preserve complete gladiator rosters and their per-gladiator
+  equipment across cold boots.
+- Right-click the game and choose **Remove > PPU Cache** once after installing
+  or changing the patch. This prevents RPCS3 from reusing LLVM code compiled
+  from an older patch.
+
+Afterwards, `SpartacusLegendsPatchInstaller.exe "<RPCS3 folder>" --verify`
+still reports whether the result is complete.
+
+This follows the RPCS3 Wiki's
+[Manually adding custom patches](https://wiki.rpcs3.net/index.php?title=Help:Game_Patches#Manually_adding_custom_patches)
+procedure. The filename and location are required: RPCS3 will not recognize a
+custom patch saved under another name or outside its `patches` directory.
 
 ## Saves and optional patches
 
 The server stores its economy profile in `data\profile.json`, its complete
 gladiator roster (including purchased Ludus slot capacity) in `data\roster.json`,
 and its campaign/Primus completion in `data\campaign.json`, all beside the
-executable. The game continues to write its normal RPCS3 save data. Back up all
-four when moving an established profile to another PC. `roster.json` and
-`campaign.json` are created automatically after the first successful login while
-RPCS3 IPC is enabled. Older schema-1 roster files are migrated conservatively so
-every occupied slot remains available.
+executable. The game continues to write its normal RPCS3 save data. When moving
+an established profile to another PC, back up those three files together with
+RPCS3's own save data. `roster.json` and `campaign.json` are created
+automatically after the first successful login while RPCS3 IPC is enabled. Older
+schema-1 roster files are migrated conservatively so every occupied slot remains
+available.
 
 `campaign.json` preserves defeated Primus battles and district-boss progress
 across cold boots. The game saves this progress locally but does not re-apply it
@@ -98,11 +165,6 @@ publisher/developer video screens while retaining the legal notices and the
 game's normal title transition. Enable it in RPCS3's patch manager if desired;
 after changing its state, remove the game's PPU cache and cold-boot once.
 
-This follows the RPCS3 Wiki's
-[Manually adding custom patches](https://wiki.rpcs3.net/index.php?title=Help:Game_Patches#Manually_adding_custom_patches)
-procedure. The filename and location are required: RPCS3 will not recognize a
-custom patch saved under another name or outside its `patches` directory.
-
 ## What the server runs
 
 - TCP 80: Ubisoft OnlineConfigService replacement
@@ -112,24 +174,55 @@ custom patch saved under another name or outside its `patches` directory.
   RPCS3 IPC
 
 All listeners bind to `127.0.0.1` by default. Logs are written to the `logs`
-folder beside the executable. Press Ctrl+C in the server window to shut all
-three listeners down cleanly.
+folder beside the executable.
 
 ## Troubleshooting
 
-If startup says a port is unavailable, close the older server instance or
-other program using that port. Only one preservation server should run.
+**Check the setup first.** These two commands answer most questions before you
+report a problem:
 
-If RPCS3 shows the service-unavailable dialog, verify the IP swap spelling,
-that the server reported all services ready, and that the compatibility patch
-is enabled for NPUB30746 version 01.00.
+```powershell
+SpartacusLegendsPatchInstaller.exe "C:\path\to\RPCS3" --verify
+SpartacusLegendsServer.exe --check
+```
 
-If currency persists but the gladiator roster or defeated Primus/boss progress
-does not, verify RPCS3's IPC Server is enabled on port `28012` and inspect
+The first re-reads RPCS3's own configuration and reports each requirement; the
+second tests the three ports and exits without starting the server.
+
+**A port is unavailable.** Only one preservation server may run at a time. TCP
+80 is also taken by web servers and by Windows' own HTTP service. Find the
+program holding it:
+
+```powershell
+netstat -ano | findstr ":80 "
+```
+
+Then identify the process ID that command prints:
+
+```powershell
+tasklist /FI "PID eq <the number>"
+```
+
+**RPCS3 shows the service-unavailable dialog.** Verify the IP swap spelling,
+that the server window reported all services ready, and that the compatibility
+patch is enabled for NPUB30746 version 01.00. Confirm the booted game's
+`PPU executable hash:` line in RPCS3's log matches
+`81471d050c14f4d20b4027686f8b571dafd32394`.
+
+**The setup worked once and then stopped.** If RPCS3 was open while the
+installer ran, RPCS3 overwrote the changes when it closed. Close RPCS3 and run
+the installer again.
+
+**Currency persists but the gladiator roster or defeated Primus/boss progress
+does not.** Verify RPCS3's IPC Server is enabled on port `28012` and inspect
 `logs\roster_bridge.log` (it records both roster and campaign capture/restore).
 Do not run another PINE client at the same time as the preservation server.
 Researchers can launch with `--no-roster-bridge` to leave IPC available to
 another tool; this disables both roster and campaign persistence.
+
+**Progress disappears between sessions.** Check that the server window is not
+reporting that it is running from a temporary folder. If it is, close it,
+extract the ZIP properly, and run the extracted copy.
 
 ## Running from source
 

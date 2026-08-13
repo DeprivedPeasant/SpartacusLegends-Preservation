@@ -35,6 +35,7 @@ tests/*
 !tests/test_economy_store.py
 !tests/test_release_patch.py
 !tests/test_patch_installer.py
+!tests/test_server_startup.py
 
 **/__pycache__/
 *.py[cod]

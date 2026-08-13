@@ -5,4 +5,4 @@ executable and its startup banner stay in sync) and `packaging/build_release.ps1
 parses it for the package and ZIP names.
 """
 
-__version__ = "0.3.6"
+__version__ = "0.3.7"
