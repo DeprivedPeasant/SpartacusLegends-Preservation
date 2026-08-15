@@ -8,6 +8,15 @@ restores locally saved fame, currency, levels, purchases, and fight progress
 across cold boots. The compatibility patch also completes the post-fight
 gladiator-recruitment store refresh, which otherwise retries indefinitely.
 
+> [!TIP]
+> **Optional 60 FPS mode:** Spartacus Legends runs correctly at 60 FPS in
+> RPCS3 without modifying the game executable. Open the game's custom
+> configuration, set **Advanced > VBlank Frequency** to **120 Hz**, and leave
+> **GPU > Frame limit** on **Auto**. Menus, gameplay timers, cutscenes, input,
+> and physics have been verified at normal speed. This is optional; leave
+> VBlank Frequency at 60 Hz for the original 30 FPS presentation if your system
+> cannot maintain 60 FPS.
+
 Shop actions the retired service no longer answers, such as replacing a
 gladiator's perk or buying Ludus execution boosts, previously left the game
 waiting forever on a loading spinner. The server now answers every shop request,
@@ -17,7 +26,9 @@ Tested configuration:
 
 - Game: Spartacus Legends, NPUB30746 version 01.00
 - RPCS3 PPU hash: `81471d050c14f4d20b4027686f8b571dafd32394`
-- RPCS3 PPU decoder: Recompiler (LLVM), locked 30 FPS in testing
+- RPCS3 PPU decoder: Recompiler (LLVM)
+- Original presentation: 30 FPS at the default 60 Hz VBlank frequency
+- Optional presentation: verified 60 FPS at 120 Hz VBlank with frame limit Auto
 
 No game files or decrypted executable content are included.
 
