@@ -33,7 +33,8 @@ class MemoryPine:
             self.memory32[record] = backing
             for offset in range(0, rb.RECORD_STRIDE, 8):
                 self.memory64[record + offset] = (slot + 1) << 56 | offset
-            self.memory64[record] = (slot + 1) << 56 | backing
+            self.memory64[record] = backing << 32 | (slot + 1)
+            self.memory32[record + 4] = slot + 1
             for offset in range(0, rb.BACKING_STRIDE, 8):
                 self.memory64[backing + offset] = (slot + 9) << 56 | offset
         # Campaign manager 5: slot points to the expected manager; dirty flag
@@ -47,11 +48,28 @@ class MemoryPine:
         for word_index, word in enumerate(words):
             self.memory64[address + word_index * 8] = word
 
+    def set_legend(self, slot, root=None):
+        root = root or (0x31800000 + slot * 0x1000)
+        record = rb.OWNED_BASE + slot * rb.RECORD_STRIDE
+        backing = rb.OWNED_BACKING_BASE + slot * rb.BACKING_STRIDE
+        self.memory64[record] = backing << 32 | root
+        self.memory32[record] = backing
+        self.memory32[record + 4] = root
+        self.memory64[record + 0x28] = (root + 0x2C) << 32 | (root + 0x30)
+        for offset in range(0, rb.LEGEND_BLOCK_SIZE, 8):
+            self.memory64[root + offset] = (0x1000 + offset) << 32 | (0x2000 + offset)
+        self.memory64[root] = (root + 0x10) << 32 | (root + 0x20)
+        return root
+
     def status(self):
         return 0
 
     def read32(self, address):
-        return self.memory32.get(address, self.memory64.get(address, 0) & 0xFFFFFFFF)
+        if address in self.memory32:
+            return self.memory32[address]
+        base = address & ~7
+        word = self.memory64.get(base, 0)
+        return (word >> 32) & 0xFFFFFFFF if address == base else word & 0xFFFFFFFF
 
     def read64(self, address):
         return self.memory64.get(address, 0)
@@ -63,7 +81,8 @@ class MemoryPine:
     def write64(self, address, value):
         self.writes.append((64, address, value))
         self.memory64[address] = value
-        self.memory32[address] = value & 0xFFFFFFFF
+        self.memory32[address] = (value >> 32) & 0xFFFFFFFF
+        self.memory32[address + 4] = value & 0xFFFFFFFF
 
 
 class RosterBridgeTests(unittest.TestCase):
@@ -80,7 +99,7 @@ class RosterBridgeTests(unittest.TestCase):
             self.assertEqual(bridge.store.load(), snapshot)
 
             document = json.loads(path.read_text(encoding="utf-8"))
-            self.assertEqual(document["schema_version"], 2)
+            self.assertEqual(document["schema_version"], 3)
             self.assertEqual(document["unlocked_slots"], 2)
             document["game"]["uuid"] = "wrong-build"
             path.write_text(json.dumps(document), encoding="utf-8")
@@ -161,11 +180,54 @@ class RosterBridgeTests(unittest.TestCase):
             document = bridge.read_snapshot(pine).to_dict()
             document["schema_version"] = 1
             document.pop("unlocked_slots")
+            document.pop("blocks")
             path.write_text(json.dumps(document), encoding="utf-8")
 
             migrated = bridge.store.load()
             self.assertEqual(migrated.count, 3)
             self.assertEqual(migrated.unlocked_slots, 3)
+
+    def test_legend_graph_is_captured_relocated_and_round_trips(self):
+        source = MemoryPine(count=2)
+        old_root = source.set_legend(1)
+        target = MemoryPine(count=1)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "roster.json"
+            bridge = self.bridge(path)
+            snapshot = bridge.read_snapshot(source)
+            self.assertEqual(snapshot.blocks[1].base, old_root)
+            bridge.store.save(snapshot)
+            self.assertEqual(bridge.store.load(), snapshot)
+
+            restored = bridge.restore_snapshot(target, snapshot)
+            # Relocation is packed by Legend ordinal, not roster slot, so
+            # procedural slots do not waste the bounded backing arena.
+            new_root = rb.LEGEND_ARENA_BASE
+            self.assertEqual(target.read32(rb.OWNED_BASE + rb.RECORD_STRIDE + 4), new_root)
+            self.assertEqual(restored.blocks[1].base, new_root)
+            self.assertEqual(
+                target.read64(new_root),
+                (new_root + 0x10) << 32 | (new_root + 0x20),
+            )
+            self.assertEqual(restored, snapshot.materialize())
+
+    def test_legacy_pointerful_roster_is_refused_before_writes(self):
+        source = MemoryPine(count=2)
+        source.set_legend(1)
+        target = MemoryPine(count=1)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "roster.json"
+            bridge = self.bridge(path)
+            document = bridge.read_snapshot(source).to_dict()
+            document["schema_version"] = 2
+            document.pop("blocks")
+            path.write_text(json.dumps(document), encoding="utf-8")
+
+            legacy = bridge.store.load()
+            self.assertEqual(legacy.unresolved_slots(), (1,))
+            with self.assertRaisesRegex(ValueError, "Legend graph recovery"):
+                bridge.restore_snapshot(target, legacy)
+            self.assertEqual(target.writes, [])
 
 
 class CampaignBridgeTests(unittest.TestCase):

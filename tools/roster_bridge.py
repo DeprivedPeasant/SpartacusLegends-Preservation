@@ -57,6 +57,28 @@ RECORD_WORDS = RECORD_STRIDE // 8
 BACKING_WORDS = BACKING_STRIDE // 8
 MAX_ROSTER = 8
 
+# Retail initializes storage for 40 owned records/backing strings even though
+# the playable Ludus is capped at eight.  Procedural fighters are flat, but
+# Legends carry shallow pointers into a packed definition/string catalog.  A
+# live Oenomaus record references a string beginning at root+0xB4 and ending at
+# root+0xF1, so the earlier 0xB0 estimate (distance between nearby catalog
+# entries) was not a complete payload. Capture a conservative 0x200-byte
+# window. Relocated windows are packed into backing-string slots 8..39; using
+# inactive owned records caused the post-fight native serializer to stall.
+# The retail A->B copy intentionally shares the live catalog for the duration
+# of a process; a persisted snapshot must instead relocate it across boots.
+RETAIL_OWNED_CAPACITY = 40
+LEGEND_BLOCK_SIZE = 0x200
+LEGEND_BLOCK_WORDS = LEGEND_BLOCK_SIZE // 8
+OWNED_BACKING_END = OWNED_BACKING_BASE + RETAIL_OWNED_CAPACITY * BACKING_STRIDE
+LEGEND_ARENA_BASE = OWNED_BACKING_BASE + MAX_ROSTER * BACKING_STRIDE
+LEGEND_ARENA_CAPACITY = ((OWNED_BACKING_END - LEGEND_ARENA_BASE) //
+                         LEGEND_BLOCK_SIZE)
+LEGEND_ARENA_END = LEGEND_ARENA_BASE + LEGEND_ARENA_CAPACITY * LEGEND_BLOCK_SIZE
+
+if LEGEND_ARENA_CAPACITY < 3 or LEGEND_ARENA_END > OWNED_BACKING_END:
+    raise RuntimeError("legend relocation arena exceeds inactive backing storage")
+
 # Campaign (Primus/mission) completion.  Manager 5 (the 6-district x 64-event
 # grid) stores completion in a table of 0x10-byte cells at manager+0xC4, indexed
 # by district*64 + event, with a dirty flag at manager+0x18C8.  The game's
@@ -193,12 +215,64 @@ def _parse_words(values, expected, label):
     return tuple(words)
 
 
+def _word_halves(word: int):
+    """Return both guest 32-bit fields represented by a PINE 64-bit word."""
+    return ((word >> 32) & 0xFFFFFFFF, word & 0xFFFFFFFF)
+
+
+def _map_word_halves(word: int, transform):
+    high, low = _word_halves(word)
+    return ((transform(high) & 0xFFFFFFFF) << 32) | (transform(low) & 0xFFFFFFFF)
+
+
+def _address_in_block(address: int, base: int):
+    return base <= address < base + LEGEND_BLOCK_SIZE
+
+
+@dataclass(frozen=True)
+class RelocatableBlock:
+    base: int
+    words: tuple[int, ...]
+
+    def __post_init__(self):
+        if not 0 < self.base <= 0xFFFFFFFF:
+            raise ValueError("invalid relocatable block base")
+        if len(self.words) != LEGEND_BLOCK_WORDS:
+            raise ValueError("invalid relocatable block length")
+        for word in self.words:
+            if not 0 <= word <= 0xFFFFFFFFFFFFFFFF:
+                raise ValueError("invalid relocatable block word")
+
+    def to_dict(self):
+        return {"base": f"{self.base:08X}", "words": _hex_words(self.words)}
+
+    @classmethod
+    def from_dict(cls, data):
+        if not isinstance(data, dict):
+            raise ValueError("relocatable block must be an object")
+        base_value = data.get("base")
+        base = int(base_value, 16) if isinstance(base_value, str) else int(base_value)
+        return cls(base, _parse_words(data.get("words", []), LEGEND_BLOCK_WORDS,
+                                      "relocatable block"))
+
+    def rebase(self, destination: int):
+        def relocate(value):
+            if _address_in_block(value, self.base):
+                return destination + (value - self.base)
+            return value
+
+        return RelocatableBlock(
+            destination, tuple(_map_word_halves(word, relocate) for word in self.words)
+        )
+
+
 @dataclass(frozen=True)
 class RosterSnapshot:
     count: int
     unlocked_slots: int
     records: tuple[tuple[int, ...], ...]
     backings: tuple[tuple[int, ...], ...]
+    blocks: tuple[RelocatableBlock | None, ...] = ()
 
     def __post_init__(self):
         if not 1 <= self.count <= MAX_ROSTER:
@@ -211,10 +285,67 @@ class RosterSnapshot:
             raise ValueError("invalid roster record length")
         if any(len(backing) != BACKING_WORDS for backing in self.backings):
             raise ValueError("invalid roster backing length")
+        if not self.blocks:
+            object.__setattr__(self, "blocks", (None,) * self.count)
+        if len(self.blocks) != self.count:
+            raise ValueError("roster count does not match relocatable blocks")
+        if sum(block is not None for block in self.blocks) > LEGEND_ARENA_CAPACITY:
+            raise ValueError(
+                f"roster exceeds {LEGEND_ARENA_CAPACITY}-Legend relocation capacity"
+            )
+        for slot, block in enumerate(self.blocks):
+            if block is None:
+                continue
+            fields = [
+                value for word in self.records[slot] for value in _word_halves(word)
+            ]
+            if not any(_address_in_block(value, block.base) for value in fields):
+                raise ValueError("relocatable block has no record pointer")
+            heap_fields = [
+                value for value in fields
+                if HEAP_POINTER_LOW <= value < HEAP_POINTER_HIGH
+            ]
+            if any(not _address_in_block(value, block.base) for value in heap_fields):
+                raise ValueError("record contains a pointer outside its relocatable block")
+
+    def unresolved_slots(self):
+        unresolved = []
+        for slot, (record, block) in enumerate(zip(self.records, self.blocks)):
+            if block is None and any(_looks_like_pointer(word) for word in record):
+                unresolved.append(slot)
+        return tuple(unresolved)
+
+    def materialize(self):
+        """Relocate every captured Legend graph into reboot-stable manager storage."""
+        if self.unresolved_slots():
+            slots = ", ".join(str(slot) for slot in self.unresolved_slots())
+            raise ValueError(f"legacy roster slots require Legend graph recovery: {slots}")
+
+        records = []
+        blocks = []
+        legend_ordinal = 0
+        for slot, (record, block) in enumerate(zip(self.records, self.blocks)):
+            if block is None:
+                records.append(record)
+                blocks.append(None)
+                continue
+            destination = LEGEND_ARENA_BASE + legend_ordinal * LEGEND_BLOCK_SIZE
+            legend_ordinal += 1
+
+            def relocate(value):
+                if _address_in_block(value, block.base):
+                    return destination + (value - block.base)
+                return value
+
+            records.append(tuple(_map_word_halves(word, relocate) for word in record))
+            blocks.append(block.rebase(destination))
+        return RosterSnapshot(
+            self.count, self.unlocked_slots, tuple(records), self.backings, tuple(blocks)
+        )
 
     def to_dict(self):
         return {
-            "schema_version": 2,
+            "schema_version": 3,
             "game": {
                 "title": EXPECTED_TITLE,
                 "serial": EXPECTED_SERIAL,
@@ -230,13 +361,15 @@ class RosterSnapshot:
             "unlocked_slots": self.unlocked_slots,
             "records": [_hex_words(record) for record in self.records],
             "backings": [_hex_words(backing) for backing in self.backings],
+            "blocks": [block.to_dict() if block is not None else None
+                       for block in self.blocks],
             "captured_at": _datetime.datetime.now().astimezone().isoformat(),
         }
 
     @classmethod
     def from_dict(cls, data):
         schema_version = int(data.get("schema_version", 0))
-        if schema_version not in (1, 2):
+        if schema_version not in (1, 2, 3):
             raise ValueError("unsupported roster schema")
         game = data.get("game", {})
         if (game.get("serial") != EXPECTED_SERIAL or
@@ -262,7 +395,17 @@ class RosterSnapshot:
             _parse_words(values, BACKING_WORDS, "backing")
             for values in data.get("backings", [])
         )
-        return cls(count, unlocked_slots, records, backings)
+        if schema_version < 3:
+            blocks = (None,) * count
+        else:
+            raw_blocks = data.get("blocks", [])
+            if not isinstance(raw_blocks, list) or len(raw_blocks) != count:
+                raise ValueError("roster count does not match relocatable blocks")
+            blocks = tuple(
+                RelocatableBlock.from_dict(value) if value is not None else None
+                for value in raw_blocks
+            )
+        return cls(count, unlocked_slots, records, backings, blocks)
 
 
 class RosterStore:
@@ -427,6 +570,44 @@ class RosterBridge:
     def _backing_address(slot):
         return OWNED_BACKING_BASE + slot * BACKING_STRIDE
 
+    @staticmethod
+    def _capture_block(client, slot, record_address, record):
+        root = client.read32(record_address + 4)
+        record_heap_fields = [
+            value for word in record for value in _word_halves(word)
+            if HEAP_POINTER_LOW <= value < HEAP_POINTER_HIGH
+        ]
+        root_is_heap = HEAP_POINTER_LOW <= root < HEAP_POINTER_HIGH
+        root_is_arena = LEGEND_ARENA_BASE <= root < LEGEND_ARENA_END
+        if not root_is_heap and not root_is_arena:
+            if record_heap_fields:
+                raise PineError(
+                    f"slot {slot} contains live heap pointers without a Legend block root"
+                )
+            return None
+
+        if record_heap_fields and any(
+                not _address_in_block(value, root) for value in record_heap_fields):
+            raise PineError(f"slot {slot} Legend record escapes its 0xB0-byte block")
+
+        words = tuple(
+            client.read64(root + offset)
+            for offset in range(0, LEGEND_BLOCK_SIZE, 8)
+        )
+        for word in words:
+            for value in _word_halves(word):
+                if HEAP_POINTER_LOW <= value < HEAP_POINTER_HIGH:
+                    if not _address_in_block(value, root):
+                        raise PineError(
+                            f"slot {slot} Legend block contains an external heap pointer"
+                        )
+                elif LEGEND_ARENA_BASE <= value < LEGEND_ARENA_END:
+                    if not _address_in_block(value, root):
+                        raise PineError(
+                            f"slot {slot} Legend block crosses relocation arenas"
+                        )
+        return RelocatableBlock(root, words)
+
     def _validate_game(self, client):
         title = client.title()
         serial = client.serial()
@@ -462,6 +643,7 @@ class RosterBridge:
             raise PineError(f"unsafe unlocked slot count {unlocked_slots}")
         records = []
         backings = []
+        blocks = []
         for slot in range(count_before):
             record_address = self._record_address(slot)
             backing_address = self._backing_address(slot)
@@ -471,22 +653,25 @@ class RosterBridge:
                     f"slot {slot} backing pointer 0x{pointer:08X}, "
                     f"expected 0x{backing_address:08X}"
                 )
-            records.append(tuple(
+            record = tuple(
                 client.read64(record_address + offset)
                 for offset in range(0, RECORD_STRIDE, 8)
-            ))
+            )
+            records.append(record)
             backings.append(tuple(
                 client.read64(backing_address + offset)
                 for offset in range(0, BACKING_STRIDE, 8)
             ))
+            blocks.append(self._capture_block(client, slot, record_address, record))
         count_after = client.read32(OWNED_COUNT)
         if count_after != count_before:
             raise PineError("roster changed during capture")
         return RosterSnapshot(
-            count_before, unlocked_slots, tuple(records), tuple(backings)
+            count_before, unlocked_slots, tuple(records), tuple(backings), tuple(blocks)
         )
 
     def restore_snapshot(self, client, snapshot):
+        snapshot = snapshot.materialize()
         # Validate every destination pointer before mutating any state.
         for slot in range(snapshot.count):
             pointer = client.read32(self._record_address(slot))
@@ -500,6 +685,15 @@ class RosterBridge:
         # Restore capacity before publishing roster occupancy. The Ludus UI
         # copies this section-1 field into its view state on first entry.
         client.write32(UNLOCKED_SLOT_INDEX, snapshot.unlocked_slots - 1)
+
+        # Legend definition graphs must exist before any active record points
+        # at them. Their pointers have already been rebased into the fixed
+        # arena formed from inactive retail-owned backing slots 8..39.
+        for block in snapshot.blocks:
+            if block is None:
+                continue
+            for index, word in enumerate(block.words):
+                client.write64(block.base + index * 8, word)
 
         # Backing storage first.  Inactive B[1..] records follow while the live
         # count still hides them; B[0] is written last, then count publishes the
@@ -519,6 +713,7 @@ class RosterBridge:
         verified = self.read_snapshot(client)
         if verified != snapshot:
             raise PineError("roster read-back did not match persisted snapshot")
+        return verified
 
     @staticmethod
     def _campaign_manager(client):
@@ -674,13 +869,31 @@ class RosterBridge:
                     continue
                 saved = self.store.load()
                 if saved is not None:
-                    current = self.read_snapshot(client)
-                    if current != saved:
-                        self.restore_snapshot(client, saved)
-                        self.log.write(f"restored {saved.count} gladiator(s); count published last")
+                    unresolved = saved.unresolved_slots()
+                    if unresolved:
+                        slots = ", ".join(str(slot) for slot in unresolved)
+                        self.log.write(
+                            "legacy roster contains unrecoverable live Legend pointers "
+                            f"in slot(s) {slots}; restore/capture disabled for this session "
+                            "and the original roster.json was preserved"
+                        )
+                        authoritative = None
                     else:
-                        self.log.write(f"live roster already matches saved {saved.count}-gladiator snapshot")
-                    authoritative = saved
+                        current = self.read_snapshot(client)
+                        if current != saved:
+                            authoritative = self.restore_snapshot(client, saved)
+                            if authoritative != saved:
+                                self.store.save(authoritative)
+                                self.log.write("rebased saved Legend graph(s) into fixed roster storage")
+                            self.log.write(
+                                f"restored {saved.count} gladiator(s); count published last"
+                            )
+                        else:
+                            self.log.write(
+                                f"live roster already matches saved "
+                                f"{saved.count}-gladiator snapshot"
+                            )
+                            authoritative = saved
                 else:
                     authoritative = self.read_snapshot(client)
                     self.store.save(authoritative)
@@ -693,21 +906,24 @@ class RosterBridge:
                     return
                 continue
 
-            candidate = self.read_snapshot(client)
-            if candidate == authoritative:
-                pending = None
-                pending_reads = 0
-            elif candidate == pending:
-                pending_reads += 1
-                if pending_reads >= self.stable_reads:
-                    self.store.save(candidate)
-                    authoritative = candidate
+            if authoritative is not None:
+                candidate = self.read_snapshot(client)
+                if candidate == authoritative:
                     pending = None
                     pending_reads = 0
-                    self.log.write(f"saved stable {candidate.count}-gladiator roster update")
-            else:
-                pending = candidate
-                pending_reads = 1
+                elif candidate == pending:
+                    pending_reads += 1
+                    if pending_reads >= self.stable_reads:
+                        self.store.save(candidate)
+                        authoritative = candidate
+                        pending = None
+                        pending_reads = 0
+                        self.log.write(
+                            f"saved stable {candidate.count}-gladiator roster update"
+                        )
+                else:
+                    pending = candidate
+                    pending_reads = 1
             campaign_state = self._poll_campaign(client, campaign_state)
             if self._wait(stop_event):
                 return

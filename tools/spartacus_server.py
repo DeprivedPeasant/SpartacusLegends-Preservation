@@ -141,6 +141,10 @@ def parse_args():
                         help="disable automatic roster capture/restore")
     parser.add_argument("--check", action="store_true",
                         help="check ports and configuration, then exit")
+    parser.add_argument("--recover-legends", type=Path, metavar="RPCS3_FOLDER",
+                        help="inspect owned Legends for re-recruitment and exit")
+    parser.add_argument("--apply-recovery", action="store_true",
+                        help="apply --recover-legends after making a full backup")
     parser.add_argument("--no-wait", action="store_true",
                         help="do not pause on a startup error")
     parser.add_argument("--run-seconds", type=float, default=0,
@@ -163,6 +167,22 @@ def main() -> int:
         sys.stdout.reconfigure(line_buffering=True)
     args = parse_args()
     base_dir = application_dir()
+    if args.apply_recovery and args.recover_legends is None:
+        print("STARTUP ERROR: --apply-recovery requires --recover-legends",
+              file=sys.stderr)
+        maybe_pause(args.no_wait)
+        return 2
+    if args.recover_legends is not None:
+        import legend_recovery
+        try:
+            return legend_recovery.run_recovery(
+                base_dir / "data", rpcs3_root=args.recover_legends,
+                apply=args.apply_recovery, pine_port=args.pine_port,
+            )
+        except legend_recovery.RecoveryError as error:
+            print(f"RECOVERY ERROR: {error}", file=sys.stderr)
+            maybe_pause(args.no_wait)
+            return 2
     log_dir = base_dir / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
 

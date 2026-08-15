@@ -22,6 +22,7 @@ tools/*
 !tools/prudp_server.py
 !tools/spartacus_server.py
 !tools/roster_bridge.py
+!tools/legend_recovery.py
 !tools/patch_installer.py
 !tools/UbiOnlineConfigService/
 tools/UbiOnlineConfigService/*
@@ -31,6 +32,7 @@ tools/UbiOnlineConfigService/*
 !tests/
 tests/*
 !tests/test_roster_bridge.py
+!tests/test_legend_recovery.py
 !tests/test_prudp_responses.py
 !tests/test_economy_store.py
 !tests/test_release_patch.py

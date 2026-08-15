@@ -150,6 +150,43 @@ automatically after the first successful login while RPCS3 IPC is enabled. Older
 schema-1 roster files are migrated conservatively so every occupied slot remains
 available.
 
+Roster schema 3 also preserves the relocatable definition block used by Legends.
+Unlike procedural gladiators, retail Legend records contain pointers to a live
+packed definition/string catalog and cannot safely be replayed as a flat byte
+array after a cold boot. The companion captures a bounded `0x200`-byte window
+and rebases its internal pointers into fixed unused roster-manager backing
+storage before publishing the owned count. The retail layout provides room for
+four such Legend windows, including the three present in the affected profile.
+Legacy schema-1/2 files containing process-local Legend pointers are never
+written back into RPCS3 memory: roster restoration and capture are disabled for
+that session, the original JSON is retained for recovery, and the reason is
+recorded in `logs\roster_bridge.log`.
+
+To remove owned Legends from any schema-1/2/3 roster so they can be recruited
+again, first close both RPCS3 and the preservation server. From a Command Prompt
+in the preservation-server folder, inspect the recovery plan without changing
+anything:
+
+```text
+SpartacusLegendsServer.exe --recover-legends "C:\path\to\RPCS3"
+```
+
+If the listed names and product IDs are correct, apply it:
+
+```text
+SpartacusLegendsServer.exe --recover-legends "C:\path\to\RPCS3" --apply-recovery
+```
+
+Recovery retains ordinary gladiators, removes each detected Legend from
+`roster.json`, and removes matching entries from the native `PRG-DATA` manifest
+when present. A missing native entry is accepted because the game may already
+have discarded it during a failed boot; duplicate native entries are all
+removed. `campaign.json` is not altered. A complete timestamped rollback copy
+is created under `recovery-backups` before either file is written. Cold-boot
+afterward and use Recruit/store refresh to recruit the defeated Legends again.
+The command refuses malformed saves, ambiguous RPCS3 users, or a running RPCS3
+PINE endpoint instead of guessing.
+
 `campaign.json` preserves defeated Primus battles and district-boss progress
 across cold boots. The game saves this progress locally but does not re-apply it
 on load, so the same RPCS3 IPC bridge that restores the roster also restores the

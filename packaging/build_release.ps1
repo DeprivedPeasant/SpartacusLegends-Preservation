@@ -40,6 +40,7 @@ if ($LASTEXITCODE -ne 0) {
     --hidden-import _version `
     --hidden-import prudp_server `
     --hidden-import roster_bridge `
+    --hidden-import legend_recovery `
     --hidden-import UbiOnlineConfigService.spartacus_onlineconfig `
     --distpath $DistRoot `
     --workpath (Join-Path $BuildRoot 'pyinstaller-work') `
