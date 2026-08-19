@@ -51,6 +51,11 @@ OWNED_BACKING_BASE = ROSTER_MANAGER + 0x44C0
 # slot index.  A fresh profile contains 1 (two usable slots); purchasing item
 # 80002 changes it to 2 (three usable slots).
 UNLOCKED_SLOT_INDEX = 0x008FF448
+# A roster shrinking by one is ordinary: the gladiator died, or was dismissed.
+# Losing several at once is not a transition the game makes during play, so a
+# drop that large has to hold for this many times longer before it is believed
+# and written over the stored roster.
+SHRINK_CONFIRMATION_FACTOR = 8
 RECORD_STRIDE = 0x158
 BACKING_STRIDE = 0x40
 RECORD_WORDS = RECORD_STRIDE // 8
@@ -229,6 +234,38 @@ def _address_in_block(address: int, base: int):
     return base <= address < base + LEGEND_BLOCK_SIZE
 
 
+def _record_heap_fields(record: Iterable[int]):
+    """Every live-heap address a roster record points at."""
+    return [
+        value for word in record for value in _word_halves(word)
+        if HEAP_POINTER_LOW <= value < HEAP_POINTER_HIGH
+    ]
+
+
+def _validate_legend_block(slot: int, root: int, words):
+    """Refuse a Legend graph that is not wholly self-contained.
+
+    A block is only relocatable if every pointer inside it stays inside it;
+    anything else would still reference this boot's catalog after the block
+    moved.  Live capture and legacy migration share this so both accept
+    exactly the same graphs.
+    """
+    if len(words) != LEGEND_BLOCK_WORDS:
+        raise PineError(f"slot {slot} Legend block is the wrong size")
+    for word in words:
+        for value in _word_halves(word):
+            if HEAP_POINTER_LOW <= value < HEAP_POINTER_HIGH:
+                if not _address_in_block(value, root):
+                    raise PineError(
+                        f"slot {slot} Legend block contains an external heap pointer"
+                    )
+            elif LEGEND_ARENA_BASE <= value < LEGEND_ARENA_END:
+                if not _address_in_block(value, root):
+                    raise PineError(
+                        f"slot {slot} Legend block crosses relocation arenas"
+                    )
+
+
 @dataclass(frozen=True)
 class RelocatableBlock:
     base: int
@@ -314,6 +351,42 @@ class RosterSnapshot:
             if block is None and any(_looks_like_pointer(word) for word in record):
                 unresolved.append(slot)
         return tuple(unresolved)
+
+    def adopt_legacy_blocks(self, read_block):
+        """Return this snapshot with the Legend graphs it lacks read from memory.
+
+        Schema 1 and 2 stored the live catalog pointers verbatim and no graph
+        at all, which only ever resolved because the retail catalog happens to
+        land at the same address on most boots.  Reading the graph back from
+        that address upgrades such a file in place, so an existing roster
+        survives the move to relocatable storage instead of having to be
+        re-recruited.
+
+        Every structural rule live capture applies is applied here too, plus a
+        liveness check on the bytes the record actually points at: a boot where
+        the catalog did move is refused rather than adopted, because adopting
+        it would persist another process's memory as the player's roster.
+        """
+        blocks = list(self.blocks)
+        for slot in self.unresolved_slots():
+            record = self.records[slot]
+            # Same field live capture reads: record+4, the low half of word 0.
+            root = record[0] & 0xFFFFFFFF
+            if not HEAP_POINTER_LOW <= root < HEAP_POINTER_HIGH:
+                raise ValueError(f"slot {slot} has no Legend graph root at record+4")
+            fields = _record_heap_fields(record)
+            if any(not _address_in_block(value, root) for value in fields):
+                raise ValueError(f"slot {slot} Legend record escapes its block")
+            words = read_block(root)
+            _validate_legend_block(slot, root, words)
+            for value in fields:
+                if words[(value - root) // 8] == 0:
+                    raise ValueError(
+                        f"slot {slot} Legend graph is absent at 0x{root:08X} this boot"
+                    )
+            blocks[slot] = RelocatableBlock(root, words)
+        return RosterSnapshot(self.count, self.unlocked_slots, self.records,
+                              self.backings, tuple(blocks))
 
     def materialize(self):
         """Relocate every captured Legend graph into reboot-stable manager storage."""
@@ -420,6 +493,32 @@ class RosterStore:
                     return RosterSnapshot.from_dict(json.load(handle))
             except FileNotFoundError:
                 return None
+
+    def archive(self, label):
+        """Keep a dated copy of the stored file before rewriting it.
+
+        Anything that rewrites a roster in a new schema is rewriting the only
+        copy the player has, so the original stays on disk under a name that
+        says where it came from.
+        """
+        with self.lock:
+            stamp = _datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+            destination = self.path.with_name(f"{self.path.name}.{label}-{stamp}")
+            destination.write_bytes(self.path.read_bytes())
+            return destination
+
+    def quarantine(self, label):
+        """Move the stored file aside so a later load starts clean.
+
+        A file that cannot be parsed is of no use to the companion, but it is
+        still the player's, so it is renamed rather than left in place to be
+        deleted by whoever is trying to stop the error from repeating.
+        """
+        with self.lock:
+            stamp = _datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+            destination = self.path.with_name(f"{self.path.name}.{label}-{stamp}")
+            os.replace(self.path, destination)
+            return destination
 
     def save(self, snapshot):
         with self.lock:
@@ -573,10 +672,7 @@ class RosterBridge:
     @staticmethod
     def _capture_block(client, slot, record_address, record):
         root = client.read32(record_address + 4)
-        record_heap_fields = [
-            value for word in record for value in _word_halves(word)
-            if HEAP_POINTER_LOW <= value < HEAP_POINTER_HIGH
-        ]
+        record_heap_fields = _record_heap_fields(record)
         root_is_heap = HEAP_POINTER_LOW <= root < HEAP_POINTER_HIGH
         root_is_arena = LEGEND_ARENA_BASE <= root < LEGEND_ARENA_END
         if not root_is_heap and not root_is_arena:
@@ -594,18 +690,7 @@ class RosterBridge:
             client.read64(root + offset)
             for offset in range(0, LEGEND_BLOCK_SIZE, 8)
         )
-        for word in words:
-            for value in _word_halves(word):
-                if HEAP_POINTER_LOW <= value < HEAP_POINTER_HIGH:
-                    if not _address_in_block(value, root):
-                        raise PineError(
-                            f"slot {slot} Legend block contains an external heap pointer"
-                        )
-                elif LEGEND_ARENA_BASE <= value < LEGEND_ARENA_END:
-                    if not _address_in_block(value, root):
-                        raise PineError(
-                            f"slot {slot} Legend block crosses relocation arenas"
-                        )
+        _validate_legend_block(slot, root, words)
         return RelocatableBlock(root, words)
 
     def _validate_game(self, client):
@@ -669,6 +754,63 @@ class RosterBridge:
         return RosterSnapshot(
             count_before, unlocked_slots, tuple(records), tuple(backings), tuple(blocks)
         )
+
+    def migrate_legacy_snapshot(self, client, saved):
+        """Upgrade a pre-schema-3 roster using this boot's live Legend graphs."""
+        def read_block(root):
+            return tuple(
+                client.read64(root + offset)
+                for offset in range(0, LEGEND_BLOCK_SIZE, 8)
+            )
+
+        return saved.adopt_legacy_blocks(read_block)
+
+    def _load_saved_roster(self):
+        """Load the stored roster, classifying the ways it can fail.
+
+        Returns (snapshot, usable). `usable` is False for a file this build
+        understands well enough to know it must not be replaced - one written
+        by a newer companion, or captured from a different game build. Starting
+        a fresh profile over such a file would discard a roster that a matching
+        build could still restore, so the session runs without persistence
+        instead.
+        """
+        try:
+            return (self.store.load(), True)
+        except json.JSONDecodeError as error:
+            moved = self.store.quarantine("corrupt")
+            self.log.write(
+                f"roster.json is not readable JSON ({error}); moved aside as "
+                f"{moved.name} and starting from the live roster"
+            )
+            return (None, True)
+        except (OSError, ValueError) as error:
+            self.log.write(
+                f"roster.json cannot be read by this build ({error}); "
+                "restore/capture disabled for this session and the file was "
+                "left untouched"
+            )
+            return (None, False)
+
+    def _adopt_legacy_roster(self, client, saved):
+        """Migrate a legacy roster, or return None to leave it untouched."""
+        slots = ", ".join(str(slot) for slot in saved.unresolved_slots())
+        try:
+            migrated = self.migrate_legacy_snapshot(client, saved)
+        except (PineError, ValueError) as error:
+            self.log.write(
+                f"legacy roster slot(s) {slots} hold live Legend pointers that this "
+                f"boot cannot resolve ({error}); restore/capture disabled for this "
+                "session and the original roster.json was preserved"
+            )
+            return None
+        backup = self.store.archive("legacy")
+        self.store.save(migrated)
+        self.log.write(
+            f"migrated legacy Legend graph(s) in slot(s) {slots} into relocatable "
+            f"storage; previous roster.json kept as {backup.name}"
+        )
+        return migrated
 
     def restore_snapshot(self, client, snapshot):
         snapshot = snapshot.materialize()
@@ -801,6 +943,41 @@ class RosterBridge:
             )
             return None
 
+    def _required_reads(self, authoritative, candidate):
+        """Confirmation reads before a roster change is written to disk."""
+        if candidate.count < authoritative.count - 1:
+            return self.stable_reads * SHRINK_CONFIRMATION_FACTOR
+        return self.stable_reads
+
+    def _poll_roster(self, client, state):
+        """Capture a roster mutation that is stable across `stable_reads`.
+
+        `state` and the return value are (authoritative, pending, pending_reads).
+        """
+        authoritative, pending, pending_reads = state
+        if authoritative is None:
+            return state
+        candidate = self.read_snapshot(client)
+        if candidate == authoritative:
+            return (authoritative, None, 0)
+        if candidate == pending:
+            pending_reads += 1
+            required = self._required_reads(authoritative, candidate)
+            if required > self.stable_reads and pending_reads == self.stable_reads:
+                self.log.write(
+                    f"roster dropped from {authoritative.count} to "
+                    f"{candidate.count} gladiator(s); holding the saved roster "
+                    "until the change persists"
+                )
+            if pending_reads >= required:
+                self.store.save(candidate)
+                self.log.write(
+                    f"saved stable {candidate.count}-gladiator roster update"
+                )
+                return (candidate, None, 0)
+            return (authoritative, pending, pending_reads)
+        return (authoritative, candidate, 1)
+
     def _poll_campaign(self, client, state):
         """Capture a campaign mutation that is stable across `stable_reads`.
 
@@ -867,16 +1044,15 @@ class RosterBridge:
                     if self._wait(stop_event):
                         return
                     continue
-                saved = self.store.load()
-                if saved is not None:
-                    unresolved = saved.unresolved_slots()
-                    if unresolved:
-                        slots = ", ".join(str(slot) for slot in unresolved)
-                        self.log.write(
-                            "legacy roster contains unrecoverable live Legend pointers "
-                            f"in slot(s) {slots}; restore/capture disabled for this session "
-                            "and the original roster.json was preserved"
-                        )
+                saved, usable = self._load_saved_roster()
+                if not usable:
+                    authoritative = None
+                elif saved is not None:
+                    if saved.unresolved_slots():
+                        saved = self._adopt_legacy_roster(client, saved)
+                    if saved is None:
+                        # The legacy file is still the only copy of this roster,
+                        # so nothing may restore over it or capture across it.
                         authoritative = None
                     else:
                         current = self.read_snapshot(client)
@@ -906,24 +1082,9 @@ class RosterBridge:
                     return
                 continue
 
-            if authoritative is not None:
-                candidate = self.read_snapshot(client)
-                if candidate == authoritative:
-                    pending = None
-                    pending_reads = 0
-                elif candidate == pending:
-                    pending_reads += 1
-                    if pending_reads >= self.stable_reads:
-                        self.store.save(candidate)
-                        authoritative = candidate
-                        pending = None
-                        pending_reads = 0
-                        self.log.write(
-                            f"saved stable {candidate.count}-gladiator roster update"
-                        )
-                else:
-                    pending = candidate
-                    pending_reads = 1
+            authoritative, pending, pending_reads = self._poll_roster(
+                client, (authoritative, pending, pending_reads)
+            )
             campaign_state = self._poll_campaign(client, campaign_state)
             if self._wait(stop_event):
                 return

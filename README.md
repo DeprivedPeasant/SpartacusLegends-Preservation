@@ -161,6 +161,16 @@ automatically after the first successful login while RPCS3 IPC is enabled. Older
 schema-1 roster files are migrated conservatively so every occupied slot remains
 available.
 
+The companion never deletes a roster file. One that is not readable JSON is
+renamed to `roster.json.corrupt-<date>-<time>` and the session starts from the
+live roster; one written by a newer companion, or captured from a different
+game build, is left exactly where it is and persistence is disabled for the
+session rather than overwritten — so downgrading the server temporarily does not
+cost you a roster. Losing a gladiator is saved like any other change, but a
+roster that drops by several at once has to keep reading that way for much
+longer before it replaces the stored one. Every one of these decisions is
+recorded in `logs\roster_bridge.log`.
+
 Roster schema 3 also preserves the relocatable definition block used by Legends.
 Unlike procedural gladiators, retail Legend records contain pointers to a live
 packed definition/string catalog and cannot safely be replayed as a flat byte
@@ -169,9 +179,15 @@ and rebases its internal pointers into fixed unused roster-manager backing
 storage before publishing the owned count. The retail layout provides room for
 four such Legend windows, including the three present in the affected profile.
 Legacy schema-1/2 files containing process-local Legend pointers are never
-written back into RPCS3 memory: roster restoration and capture are disabled for
-that session, the original JSON is retained for recovery, and the reason is
-recorded in `logs\roster_bridge.log`.
+written back into RPCS3 memory. On the first login after upgrading, the
+companion instead reads each recorded Legend graph out of the running game and
+rewrites the file as schema 3, keeping the original alongside it as
+`roster.json.legacy-<date>-<time>`; an upgraded roster no longer depends on the
+catalog address at all. If the catalog is not where the legacy file recorded it
+— because it moved, or because something else now occupies that memory — the
+migration is refused rather than guessed: roster restoration and capture are
+disabled for that session, the original JSON is retained for recovery, and the
+reason is recorded in `logs\roster_bridge.log`.
 
 To remove owned Legends from any schema-1/2/3 roster so they can be recruited
 again, first close both RPCS3 and the preservation server. From a Command Prompt

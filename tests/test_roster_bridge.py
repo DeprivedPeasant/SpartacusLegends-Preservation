@@ -229,6 +229,139 @@ class RosterBridgeTests(unittest.TestCase):
                 bridge.restore_snapshot(target, legacy)
             self.assertEqual(target.writes, [])
 
+    def write_legacy_roster(self, bridge, path, source):
+        """Store what schema 2 wrote: live pointers, no Legend graph."""
+        document = bridge.read_snapshot(source).to_dict()
+        document["schema_version"] = 2
+        document.pop("blocks")
+        path.write_text(json.dumps(document), encoding="utf-8")
+        return bridge.store.load()
+
+    def test_unreadable_roster_is_quarantined_and_the_session_continues(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "roster.json"
+            bridge = self.bridge(path)
+            path.write_text("{ this is not json", encoding="utf-8")
+
+            saved, usable = bridge._load_saved_roster()
+            self.assertIsNone(saved)
+            self.assertTrue(usable)
+            self.assertFalse(path.exists())
+            quarantined = list(Path(directory).glob("roster.json.corrupt-*"))
+            self.assertEqual(len(quarantined), 1)
+            self.assertEqual(
+                quarantined[0].read_text(encoding="utf-8"), "{ this is not json"
+            )
+
+    def test_roster_from_another_build_is_left_alone(self):
+        pine = MemoryPine(count=3)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "roster.json"
+            bridge = self.bridge(path)
+            # A newer companion's schema, and a roster from another build: both
+            # parse, so neither may be replaced by a fresh capture.
+            for mutate in (lambda d: d.update(schema_version=99),
+                           lambda d: d["game"].update(uuid="another-build")):
+                document = bridge.read_snapshot(pine).to_dict()
+                mutate(document)
+                path.write_text(json.dumps(document), encoding="utf-8")
+                original = path.read_bytes()
+
+                saved, usable = bridge._load_saved_roster()
+                self.assertIsNone(saved)
+                self.assertFalse(usable)
+                self.assertEqual(path.read_bytes(), original)
+            self.assertEqual(list(Path(directory).glob("roster.json.*")), [])
+
+    def test_roster_shrinking_by_one_saves_but_a_collapse_must_persist(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "roster.json"
+            bridge = self.bridge(path)
+            authoritative = bridge.read_snapshot(MemoryPine(count=4))
+
+            # A death takes the usual two confirmations.
+            death = MemoryPine(count=3)
+            state = (authoritative, None, 0)
+            for _ in range(bridge.stable_reads):
+                state = bridge._poll_roster(death, state)
+            self.assertEqual(state[0].count, 3)
+            self.assertEqual(json.loads(path.read_text(encoding="utf-8"))["count"], 3)
+
+            # Losing three at once does not, until it keeps reading that way.
+            collapse = MemoryPine(count=1)
+            state = (authoritative, None, 0)
+            required = bridge.stable_reads * rb.SHRINK_CONFIRMATION_FACTOR
+            for _ in range(required - 1):
+                state = bridge._poll_roster(collapse, state)
+                self.assertEqual(state[0], authoritative)
+            self.assertEqual(json.loads(path.read_text(encoding="utf-8"))["count"], 3)
+
+            state = bridge._poll_roster(collapse, state)
+            self.assertEqual(state[0].count, 1)
+            self.assertEqual(json.loads(path.read_text(encoding="utf-8"))["count"], 1)
+
+    def test_legacy_roster_adopts_this_boots_legend_graph(self):
+        source = MemoryPine(count=2)
+        root = source.set_legend(1)
+        # The catalog is still resident at the recorded address, but the live
+        # roster is the bare one the game boots with.
+        target = MemoryPine(count=1)
+        for offset in range(0, rb.LEGEND_BLOCK_SIZE, 8):
+            target.memory64[root + offset] = (0x1000 + offset) << 32 | (0x2000 + offset)
+        target.memory64[root] = (root + 0x10) << 32 | (root + 0x20)
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "roster.json"
+            bridge = self.bridge(path)
+            legacy = self.write_legacy_roster(bridge, path, source)
+            original = path.read_bytes()
+
+            migrated = bridge._adopt_legacy_roster(target, legacy)
+            self.assertEqual(migrated.unresolved_slots(), ())
+            self.assertEqual(migrated.blocks[1].base, root)
+            self.assertEqual(migrated.records, legacy.records)
+
+            stored = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(stored["schema_version"], 3)
+            self.assertIsNotNone(stored["blocks"][1])
+            backups = list(Path(directory).glob("roster.json.legacy-*"))
+            self.assertEqual(len(backups), 1)
+            self.assertEqual(backups[0].read_bytes(), original)
+
+            # A migrated roster relocates like any captured one, so the next
+            # boot no longer depends on the catalog address at all.
+            restored = bridge.restore_snapshot(target, migrated)
+            self.assertEqual(restored.blocks[1].base, rb.LEGEND_ARENA_BASE)
+            self.assertEqual(
+                target.read32(rb.OWNED_BASE + rb.RECORD_STRIDE + 4),
+                rb.LEGEND_ARENA_BASE,
+            )
+
+    def test_legacy_roster_is_preserved_when_the_catalog_moved(self):
+        source = MemoryPine(count=2)
+        root = source.set_legend(1)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "roster.json"
+            bridge = self.bridge(path)
+            legacy = self.write_legacy_roster(bridge, path, source)
+            original = path.read_bytes()
+
+            # Nothing at the recorded address this boot.
+            absent = MemoryPine(count=1)
+            self.assertIsNone(bridge._adopt_legacy_roster(absent, legacy))
+
+            # Someone else's allocation at the recorded address.
+            foreign = MemoryPine(count=1)
+            for offset in range(0, rb.LEGEND_BLOCK_SIZE, 8):
+                foreign.memory64[root + offset] = (root + 0x10) << 32 | (root + 0x20)
+            foreign.memory64[root + 0x40] = rb.HEAP_POINTER_LOW << 32
+            self.assertIsNone(bridge._adopt_legacy_roster(foreign, legacy))
+
+            self.assertEqual(path.read_bytes(), original)
+            self.assertEqual(list(Path(directory).glob("roster.json.legacy-*")), [])
+            self.assertEqual(absent.writes, [])
+            self.assertEqual(foreign.writes, [])
+
 
 class CampaignBridgeTests(unittest.TestCase):
     def bridge(self, path):
