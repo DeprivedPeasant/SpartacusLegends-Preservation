@@ -3,10 +3,11 @@
 This project restores the login/bootstrap path for the PS3 version of
 Spartacus Legends using a local OnlineConfig and Quazal RendezVous server.
 Once bootstrap completes, the preserved single-player game runs locally. The
-server reimplements the retired economy and inventory calls, while the patch
-restores locally saved fame, currency, levels, purchases, and fight progress
-across cold boots. The compatibility patch also completes the post-fight
-gladiator-recruitment store refresh, which otherwise retries indefinitely.
+server reimplements the retired economy, inventory, and native UserStorage
+calls. At login, the game automatically enumerates and restores its server-side
+profile, campaign, and complete gladiator-roster objects. The compatibility
+patch also completes the post-fight gladiator-recruitment store refresh, which
+otherwise retries indefinitely.
 
 > [!TIP]
 > **Optional 60 FPS mode:** Spartacus Legends runs correctly at 60 FPS in
@@ -67,11 +68,11 @@ Run these in order. Each step says what you should see.
 onto it, or double-click it and paste the path to that folder (the one
 containing `rpcs3.exe`), then confirm.
 
-The installer merges the three supplied patches into RPCS3's imported patches,
+The installer merges the supplied patch entries into RPCS3's imported patches,
 applies the NPUB30746 network configuration, enables the required compatibility
-patch, enables the IPC server, and clears the game's PPU cache. Existing
-configuration files are backed up, and unrelated settings and optional patch
-choices are kept.
+patch, and clears the game's PPU cache. Existing configuration files are backed
+up, and unrelated settings and optional patch choices are kept. RPCS3 IPC is
+not required and the installer does not change its IPC settings.
 
 It then re-reads RPCS3's own files and prints the result. Every line must
 read `[OK]`, ending in:
@@ -133,10 +134,6 @@ same four changes by hand.
   - **PSN Status:** RPCN
   - **IP swap list:** `onlineconfigservice.ubi.com=127.0.0.1`
 
-- Open **Manage > Network Services > IPC**, enable **Enable IPC Server**, and
-  leave its port at `28012`. The preservation server uses this local PINE
-  connection to preserve complete gladiator rosters and their per-gladiator
-  equipment across cold boots.
 - Right-click the game and choose **Remove > PPU Cache** once after installing
   or changing the patch. This prevents RPCS3 from reusing LLVM code compiled
   from an older patch.
@@ -149,50 +146,66 @@ This follows the RPCS3 Wiki's
 procedure. The filename and location are required: RPCS3 will not recognize a
 custom patch saved under another name or outside its `patches` directory.
 
-## Saves and optional patches
+## Saves, backups, and upgrading
 
-The server stores its economy profile in `data\profile.json`, its complete
-gladiator roster (including purchased Ludus slot capacity) in `data\roster.json`,
-and its campaign/Primus completion in `data\campaign.json`, all beside the
-executable. The game continues to write its normal RPCS3 save data. When moving
-an established profile to another PC, back up those three files together with
-RPCS3's own save data. `roster.json` and `campaign.json` are created
-automatically after the first successful login while RPCS3 IPC is enabled. Older
-schema-1 roster files are migrated conservatively so every occupied slot remains
-available.
+The authoritative server-side save is the `data\usercontent` directory beside
+`SpartacusLegendsServer.exe`. It contains the three opaque objects written by
+the game itself:
 
-The companion never deletes a roster file. One that is not readable JSON is
-renamed to `roster.json.corrupt-<date>-<time>` and the session starts from the
-live roster; one written by a newer companion, or captured from a different
-game build, is left exactly where it is and persistence is disabled for the
-session rather than overwritten — so downgrading the server temporarily does not
-cost you a roster. Losing a gladiator is saved like any other change, but a
-roster that drops by several at once has to keep reading that way for much
-longer before it replaces the stored one. Every one of these decisions is
-recorded in `logs\roster_bridge.log`.
+| Path | Contents | Exact size |
+| --- | --- | ---: |
+| `data\usercontent\80000001\1.bin` | Profile, currency, fame, and related account values | 4664 bytes |
+| `data\usercontent\80000002\1.bin` | Campaign, mission, and Primus progress | 6148 bytes |
+| `data\usercontent\80000003\1.bin` | Complete gladiator roster, equipment, and roster state | 21444 bytes |
 
-Roster schema 3 also preserves the relocatable definition block used by Legends.
-Unlike procedural gladiators, retail Legend records contain pointers to a live
-packed definition/string catalog and cannot safely be replayed as a flat byte
-array after a cold boot. The companion captures a bounded `0x200`-byte window
-and rebases its internal pointers into fixed unused roster-manager backing
-storage before publishing the owned count. The retail layout provides room for
-four such Legend windows, including the three present in the affected profile.
-Legacy schema-1/2 files containing process-local Legend pointers are never
-written back into RPCS3 memory. On the first login after upgrading, the
-companion instead reads each recorded Legend graph out of the running game and
-rewrites the file as schema 3, keeping the original alongside it as
-`roster.json.legacy-<date>-<time>`; an upgraded roster no longer depends on the
-catalog address at all. If the catalog is not where the legacy file recorded it
-— because it moved, or because something else now occupies that memory — the
-migration is refused rather than guessed: roster restoration and capture are
-disabled for that session, the original JSON is retained for recovery, and the
-reason is recorded in `logs\roster_bridge.log`.
+The server stores uploads atomically and returns these objects during automatic
+save enumeration at the next login. The game also continues to write its normal
+RPCS3 `PRG-DATA` save. To back up or move a profile, close both programs and
+copy the server's entire `data` directory together with RPCS3's saved data. Do
+not copy only one native object: the profile, campaign, roster, economy service,
+and local save advance together.
 
-To remove owned Legends from any schema-1/2/3 roster so they can be recruited
-again, first close both RPCS3 and the preservation server. From a Command Prompt
-in the preservation-server folder, inspect the recovery plan without changing
-anything:
+The compatibility patch retains the local section-1 profile apply as a safe
+fallback. RPCS3's `PRG-DATA` profile can initialize fame, currency, and related
+values before a native type-1 object exists; when the server has a valid type-1
+object, the game's normal server readback then applies the authoritative copy.
+
+`data\profile.json`, `data\roster.json`, and `data\campaign.json` come from the
+v0.3.x persistence system. `roster.json` and `campaign.json` are legacy PINE
+snapshots and normal v0.4 startup does not read or write them. `profile.json`
+remains active as the economy service's companion database, but it is not a
+replacement for the native type-1 object.
+
+### Upgrading from v0.3.x
+
+Automatic conversion of legacy roster and campaign JSON is intentionally
+deferred. Before trying v0.4:
+
+1. Close RPCS3 and the old preservation server.
+2. Back up the old server's complete `data` directory and RPCS3's saved data.
+3. Extract v0.4 into a new folder rather than overwriting the working v0.3.x
+   installation.
+4. Copy the old `data` directory into the new folder so `profile.json` and the
+   legacy recovery copies remain available.
+
+Starting v0.4 normally will use native files that already exist. If no native
+type-2/type-3 files exist, it will not import `campaign.json` or `roster.json`;
+the game may create a new fallback roster on its next save. Keep the v0.3.x
+folder and backup until the planned migration tool is available.
+
+For an established profile that must continue using its legacy snapshots in
+the meantime, enable RPCS3 IPC on port `28012` and launch:
+
+```text
+SpartacusLegendsServer.exe --legacy-roster-bridge
+```
+
+This is a temporary compatibility/recovery mode, not the normal v0.4 setup and
+not a completed migration. Do not delete the legacy JSON after using it.
+
+The existing Legend recovery command also operates only on legacy
+`roster.json` plus RPCS3 `PRG-DATA`. To inspect its plan without changing
+anything, close both programs and run:
 
 ```text
 SpartacusLegendsServer.exe --recover-legends "C:\path\to\RPCS3"
@@ -204,20 +217,11 @@ If the listed names and product IDs are correct, apply it:
 SpartacusLegendsServer.exe --recover-legends "C:\path\to\RPCS3" --apply-recovery
 ```
 
-Recovery retains ordinary gladiators, removes each detected Legend from
-`roster.json`, and removes matching entries from the native `PRG-DATA` manifest
-when present. A missing native entry is accepted because the game may already
-have discarded it during a failed boot; duplicate native entries are all
-removed. `campaign.json` is not altered. A complete timestamped rollback copy
-is created under `recovery-backups` before either file is written. Cold-boot
-afterward and use Recruit/store refresh to recruit the defeated Legends again.
-The command refuses malformed saves, ambiguous RPCS3 users, or a running RPCS3
-PINE endpoint instead of guessing.
+Recovery retains ordinary gladiators, removes each detected Legend from the
+legacy roster and matching `PRG-DATA` manifest, and creates a complete rollback
+copy under `recovery-backups`. It does not edit native UserStorage objects.
 
-`campaign.json` preserves defeated Primus battles and district-boss progress
-across cold boots. The game saves this progress locally but does not re-apply it
-on load, so the same RPCS3 IPC bridge that restores the roster also restores the
-campaign completion after each login.
+## Optional patches
 
 For rapid testing, **Spartacus Legends - One-hit fight debug cheat (optional)**
 can be enabled in RPCS3's patch manager. It makes the player invulnerable and
@@ -244,11 +248,11 @@ both RPCS3 logs.
 - TCP 80: Ubisoft OnlineConfigService replacement
 - UDP 21000: Quazal authentication/TicketGranting
 - UDP 21001: Quazal secure connection and title services
-- TCP 28012 client: automatic PINE roster and campaign capture/restore through
-  RPCS3 IPC
 
 All listeners bind to `127.0.0.1` by default. Logs are written to the `logs`
-folder beside the executable.
+folder beside the executable. Normal startup does not connect to RPCS3 IPC.
+Port `28012` is used only when `--legacy-roster-bridge` or a recovery operation
+is explicitly requested.
 
 Researchers running multiple RPCS3 clients through a LAN address can start the
 server with `--host 0.0.0.0 --advertise-host <server-LAN-IP>`. The advertised
@@ -293,12 +297,16 @@ patch is enabled for NPUB30746 version 01.00. Confirm the booted game's
 installer ran, RPCS3 overwrote the changes when it closed. Close RPCS3 and run
 the installer again.
 
-**Currency persists but the gladiator roster or defeated Primus/boss progress
-does not.** Verify RPCS3's IPC Server is enabled on port `28012` and inspect
-`logs\roster_bridge.log` (it records both roster and campaign capture/restore).
-Do not run another PINE client at the same time as the preservation server.
-Researchers can launch with `--no-roster-bridge` to leave IPC available to
-another tool; this disables both roster and campaign persistence.
+**Profile, roster, or campaign progress does not return.** Check that the three
+files beneath `data\usercontent` exist at the exact sizes listed above. Inspect
+`logs\online_config.log` for successful `PUT` entries when saving and `GET`
+entries during the next login. RPCS3 IPC and PINE are not involved in normal
+v0.4 persistence.
+
+**A v0.3.x roster or campaign is missing after upgrading.** Normal v0.4 startup
+does not import `roster.json` or `campaign.json`. Restore your backed-up folder
+and follow the upgrade warning above; do not allow a new fallback roster to
+replace your only legacy copy.
 
 **Progress disappears between sessions.** Check that the server window is not
 reporting that it is running from a temporary folder. If it is, close it,

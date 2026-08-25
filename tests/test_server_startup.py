@@ -9,7 +9,11 @@ from pathlib import Path
 # executable does.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 
-from tools.spartacus_server import configure_environment, running_from_temp
+from tools.spartacus_server import (
+    configure_environment,
+    parse_args,
+    running_from_temp,
+)
 
 
 class TempFolderGuardTests(unittest.TestCase):
@@ -35,10 +39,34 @@ class TempFolderGuardTests(unittest.TestCase):
 class AdvertisedHostTests(unittest.TestCase):
     def test_lan_advertised_host_reaches_quazal_redirect_environment(self):
         with tempfile.TemporaryDirectory() as temp:
-            with unittest.mock.patch.dict(os.environ, {}, clear=True):
-                configure_environment(Path(temp), 21001, "192.168.0.153")
+            release_dir = Path(temp) / "release"
+            log_dir = release_dir / "logs"
+            with unittest.mock.patch.dict(os.environ, {}, clear=True), \
+                    unittest.mock.patch(
+                        "tools.spartacus_server.application_dir",
+                        return_value=release_dir,
+                    ):
+                configure_environment(log_dir, 21001, "192.168.0.153")
                 self.assertEqual(os.environ["RDV_HOST"], "192.168.0.153")
                 self.assertEqual(os.environ["RDV_ADVERTISE_PORT"], "21001")
+                self.assertEqual(
+                    os.environ["SPARTACUS_USER_CONTENT_HOST"],
+                    "192.168.0.153",
+                )
+                self.assertEqual(
+                    Path(os.environ["SPARTACUS_USER_CONTENT_DIR"]),
+                    release_dir / "data" / "usercontent",
+                )
+
+
+class PersistenceModeTests(unittest.TestCase):
+    def test_native_persistence_is_the_default(self):
+        args = parse_args([])
+        self.assertFalse(args.legacy_roster_bridge)
+
+    def test_legacy_pine_bridge_requires_explicit_opt_in(self):
+        args = parse_args(["--legacy-roster-bridge"])
+        self.assertTrue(args.legacy_roster_bridge)
 
 
 if __name__ == "__main__":

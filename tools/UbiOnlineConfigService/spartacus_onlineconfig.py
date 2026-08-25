@@ -5,8 +5,10 @@ from __future__ import annotations
 
 import argparse
 import datetime as _datetime
+import hashlib
 import json
 import os
+import struct
 from pathlib import Path
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -20,6 +22,10 @@ DEFAULT_HTTP_PORT = int(os.environ.get("SPARTACUS_HTTP_PORT", "80"))
 DEFAULT_LOG_PATH = Path(os.environ.get(
     "SPARTACUS_CONFIG_LOG",
     Path(__file__).resolve().parents[2] / "logs" / "online_config.log",
+))
+DEFAULT_USER_CONTENT_DIR = Path(os.environ.get(
+    "SPARTACUS_USER_CONTENT_DIR",
+    Path(__file__).resolve().parents[2] / "data" / "usercontent",
 ))
 
 
@@ -70,40 +76,122 @@ def make_response(rdv_host: str = DEFAULT_RDV_HOST,
     return json.dumps(values, separators=(",", ":")).encode("utf-8")
 
 
-def make_handler(rdv_host: str, rdv_port: int, service_log: ServiceLog):
+def make_remote_config_response() -> bytes:
+    """Minimal KFF mode-3 object: version 1 and no fixed records."""
+    return struct.pack(">II", 1, 0)
+
+
+def make_handler(rdv_host: str, rdv_port: int, service_log: ServiceLog,
+                 user_content_dir: Path = DEFAULT_USER_CONTENT_DIR):
     response_body = make_response(rdv_host, rdv_port)
+    remote_config_body = make_remote_config_response()
+    user_content_dir = Path(user_content_dir)
 
     class OnlineConfigHandler(BaseHTTPRequestHandler):
         server_version = "SpartacusOnlineConfig/1.0"
 
+        @staticmethod
+        def _user_content_target(route: str):
+            parts = route.strip("/").split("/")
+            if len(parts) != 3 or parts[0] != "usercontent" \
+                    or not parts[2].endswith(".bin"):
+                return None
+            try:
+                type_id = int(parts[1], 16)
+                content_id = int(parts[2][:-4], 10)
+            except ValueError:
+                return None
+            return (user_content_dir / f"{type_id:08x}" /
+                    f"{content_id}.bin")
+
+        def _send_body(self, status: int, body: bytes,
+                       content_type: str = "application/octet-stream") -> None:
+            self.send_response(status)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Connection", "close")
+            self.end_headers()
+            if self.command != "HEAD" and body:
+                self.wfile.write(body)
+
         def _respond(self) -> None:
             parsed = urlparse(self.path)
+            user_content_target = self._user_content_target(parsed.path)
+            if user_content_target is not None:
+                if self.command in ("POST", "PUT"):
+                    try:
+                        length = int(self.headers.get("Content-Length", "0"))
+                    except ValueError:
+                        length = -1
+                    if length < 0 or length > 0x100000:
+                        service_log.write(
+                            f"{self.command} {self.path} rejected length={length}"
+                        )
+                        self._send_body(413, b"")
+                        return
+                    body = self.rfile.read(length)
+                    user_content_target.parent.mkdir(parents=True, exist_ok=True)
+                    temporary = user_content_target.with_name(
+                        user_content_target.name +
+                        f".tmp-{threading.get_ident()}"
+                    )
+                    temporary.write_bytes(body)
+                    os.replace(temporary, user_content_target)
+                    digest = hashlib.sha256(body).hexdigest()
+                    service_log.write(
+                        f"{self.command} {self.path} stored={len(body)} "
+                        f"sha256={digest}"
+                    )
+                    self._send_body(200, b"")
+                    return
+                if self.command in ("GET", "HEAD"):
+                    if not user_content_target.is_file():
+                        service_log.write(
+                            f"{self.command} {self.path} user content not found"
+                        )
+                        self._send_body(404, b"")
+                        return
+                    body = user_content_target.read_bytes()
+                    service_log.write(
+                        f"{self.command} {self.path} served={len(body)}"
+                    )
+                    self._send_body(200, body)
+                    return
+                self._send_body(405, b"")
+                return
+
             query = parse_qs(parsed.query)
             config_id = query.get("onlineConfigID", [None])[0]
             target = query.get("target", [None])[0]
             ticket = query.get("psnTicket", [None])[0]
+            host = self.headers.get("Host")
             known_route = parsed.path in (
                 "/OnlineConfigService.svc/GetOnlineConfig",
                 "/OnlineConfigService.svc/GetOnlineConfigPSN",
             )
+            is_remote_config = parsed.path == "/remoteconfig.bin"
             ticket_state = f"present({len(ticket)})" if ticket else "absent"
             service_log.write(
-                f"{self.command} {parsed.path} target={target!r} "
+                f"{self.command} {self.path} host={host!r} target={target!r} "
                 f"config_id={config_id!r} psn_ticket={ticket_state}"
                 + ("" if known_route else " [fallback route]")
             )
             if config_id and config_id != SPARTACUS_ONLINE_CONFIG_ID:
                 service_log.write("warning: unknown OnlineConfig ID; responding anyway")
+            body = remote_config_body if is_remote_config else response_body
+            content_type = ("application/octet-stream" if is_remote_config
+                            else "application/json")
             self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(response_body)))
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(body)))
             self.send_header("Connection", "close")
             self.end_headers()
             if self.command != "HEAD":
-                self.wfile.write(response_body)
+                self.wfile.write(body)
 
         do_GET = _respond
         do_POST = _respond
+        do_PUT = _respond
         do_HEAD = _respond
 
         def log_message(self, fmt, *args):

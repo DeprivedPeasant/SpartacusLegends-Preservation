@@ -819,3 +819,70 @@ as a third persisted file to back up, and the build should ship it like roster;
 faithfully, game accepts it) - harmless, worth a tidy later; (3) broader
 regression: full-game second-playthrough Primus, multiple districts, and a
 death+cold-boot combined run.
+
+### SHOP HANGS: catch-all + complete method enumeration (2026-08-12)
+
+Root cause of the whole class (perk replacement, execution boosts, others):
+protocol 102 was the ONE protocol excluded from the server's GENERIC_ACK
+fallback. Its handler chain had no `else`, so an unrecognised method got a bare
+transport ACK and no RMC reply, and the client blocked forever on its async job.
+
+Fixed in `tools/prudp_server.py`: an unhandled-method branch always emits a
+well-formed response (no hang), debits nothing, and logs method/call id/params
+decoded as u32 + i32 so each occurrence is a ready-made bug report. Shapes are
+overridable live via `P102M<n>_SHAPE` / `P102_FALLBACK_SHAPE`
+(receipt|balances|empty|zero|result|error[:code]); `build_rmc_error` adds a
+failure envelope (layout follows Quazal/NEX convention, unverified here, never
+used by default).
+
+Static enumeration complete - see `notes/05-monetization-method-map.md` for the
+canonical table. Protocol 102 = parser 0x00018C4C, **15 methods**, and methods
+sharing a parser case body share a response shape. 6 implemented (3, 6, 7, 11,
+12, 13); **9 remain (1, 2, 4, 5, 8, 9, 10, 14, 15) but only 5 distinct unknown
+shapes**, of which m5 is already solved (shares m6/m11/m13's balance pair) and
+m2/m9/m10/m14/m15 have recovered shapes now seeded as informed defaults in
+`P102_METHOD_SHAPES`. Only methods 1, 4 and 8 are structurally unknown
+(structured object decoders 0x004CF094 / 0x00015D88 / 0x004CE5B8) and must be
+decompiled before being answered - do not guess a structured layout.
+
+Identification is conclusive: all six live-validated methods match the
+statically recovered shapes exactly. This also explains why m13 worked first
+try with the m7 receipt - its case body wants only the balance pair, and the
+receipt's first 8 bytes are exactly that (harmless over-send, not a correct
+shape). That superset property is what makes the receipt a safe default and is
+pinned by `tests/test_prudp_responses.py` (23 tests green).
+
+NEXT: reproduce perk replacement and execution boost against the catch-all,
+read the `UNHANDLED Monetization` log lines to identify which methods they are,
+then implement from the table.
+
+### SHOP: first catch-all capture; m9/m15 identified; gold-zeroing fixed (2026-08-12)
+
+Live test with the catch-all: **no hangs** on either execution boost or perk
+replacement (the hang class is closed). Captured three unhandled methods:
+`m9(item_id)` after each `m7` boost purchase, and `m15([gladiator, perk, 2])` =
+perk replacement. Both are case body 0x00018EBC (single u32).
+
+REGRESSION FOUND AND FIXED: that u32 is the updated GOLD balance. The initial
+`zero` default therefore set the player's on-screen gold to 0. Server economy
+was never affected (profile.json stayed gold=999931; the client never pushed the
+zero back). Methods 9/10/14/15 now default to shape `gold`; added `gold`/`silver`
+fallback shapes. The client's displayed gold resyncs from the next m6/m7
+response, which carry absolute authoritative balances.
+
+Lesson for the remaining unknowns: a structurally-correct shape can still be
+semantically wrong, and for currency-carrying methods the blast radius is the
+player's balance. Prefer returning an authoritative value over a placeholder.
+
+### SHOP: m15 perk swap implemented and validated (2026-08-12)
+
+`m15` = `<gladiator, perk, gold_cost>`, debits the cost, returns updated gold.
+Confirmed by a slot-1 vs slot-2 discriminating test: param[2] is 2 for both
+slots and both perks, so it is the cost, not a slot index. Live: 999,924 ->
+999,922, player-confirmed correct. `m9` (post-purchase activate, returns gold)
+also confirmed with no zeroing. Gold is awarded on level-up via ordinary `m6`.
+
+Method note: a server restart silently invalidates the client's RMC session -
+PING|ACKs keep flowing, which masks it, but no DATA arrives and every in-game
+action that needs the server fails as if cancelled. Never restart the server
+mid-test; cold boot the client afterwards.

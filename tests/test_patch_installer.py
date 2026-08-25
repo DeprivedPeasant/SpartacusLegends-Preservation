@@ -81,7 +81,7 @@ PPU-81471d050c14f4d20b4027686f8b571dafd32394:
         self.assertEqual(merged.count('  "Spartacus Legends - Server emulator compatibility":'), 1)
         self.assertEqual(merged.count(
             '  "Spartacus Legends - Online matchmaking compatibility (experimental)":'), 1)
-        self.assertIn('Patch Version: "4.0"', merged)
+        self.assertIn('Patch Version: "4.2"', merged)
 
     def test_install_creates_backup_and_preserves_custom_patch(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -160,12 +160,12 @@ PPU-81471d050c14f4d20b4027686f8b571dafd32394:
             self.assertIn("  UPNP Enabled: false", custom)
             self.assertIn(f"  {COMPATIBILITY_PATCH}:", result.patch_config.read_text())
             self.assertEqual(
-                result.ipc_config.read_text(encoding="utf-8"),
-                "IPC Server enabled: true\nIPC Port: 28012\n",
+                (root / "config" / "ipc.yml").read_text(encoding="utf-8"),
+                "IPC Server enabled: false\nIPC Port: 12345\n",
             )
             self.assertFalse(cache.exists())
             self.assertTrue(result.cache_cleared)
-            self.assertEqual(len(result.backups), 3)
+            self.assertEqual(len(result.backups), 2)
             self.assertTrue(all(path.is_file() for path in result.backups))
             self.assertIn('  "Mine": {}', result.imported_patch.read_text())
 

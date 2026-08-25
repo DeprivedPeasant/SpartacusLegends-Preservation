@@ -34,6 +34,13 @@ class EconomyStoreTests(unittest.TestCase):
             [10236],
         )
 
+    def test_slot_entitlements_returns_only_roster_slot_purchases(self):
+        store, _ = self.make_store({
+            "owned_items": [10236, 80007, 80001, 80002, 80008],
+        })
+
+        self.assertEqual(store.slot_entitlements(), [80002, 80007])
+
     def test_refresh_debits_cost_without_creating_inventory(self):
         store, path = self.make_store({
             "gold": 10,

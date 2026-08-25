@@ -105,6 +105,11 @@ GENERIC_BODIES = {
     # qlist<UserContent>, where UserContent is UserContentKey(u32 typeID,
     # u64 contentID), u32 pid, qlist<ContentProperty>. Built per request.
     "user_content_stub": None,
+    # UserStorage(53) m9 GetContentUrl returns UserContentURL: three Quazal
+    # strings (protocol, host, path). The empty form remains useful as a
+    # decoder probe; external_content_url builds a usable URL per request.
+    "external_content_stub": struct.pack("<HHH", 0, 0, 0),
+    "external_content_url": None,
 }
 
 # Per-(protocol, method) overrides so a single service can be varied while
@@ -155,6 +160,21 @@ PROTO_AUTHENTICATION = 0x0A
 PROTO_SECURE = 0x0B          # SecureConnectionProtocol
 PROTO_NOTIFICATION = 0x0E    # GlobalNotificationEventProtocol (live-confirmed)
 PROTO_MONETIZATION = 102
+PROTO_USER_STORAGE = 53
+
+# UserStorage is still being probed method-by-method.  Keep the two response
+# shapes currently understood out of the "unknown" diagnostic, but capture
+# every request so a future method cannot be lost in the generic fallback.
+USERSTORAGE_KNOWN_METHODS = frozenset((1, 6, 7, 8, 9, 21))
+
+# ContentProperty 100 selects the title's native payload layout. Format 2's
+# type-1 branch accepts the writer's full 0x1238-byte profile object; format 1
+# is the older 0x1160-byte layout.
+USER_CONTENT_FORMAT_VERSIONS = {
+    0x80000001: 2,
+    0x80000002: 1,
+    0x80000003: 2,
+}
 
 # Response shapes recovered from the client's OWN response parser (parser
 # 0x00018C4C, 15 methods - see notes/05-monetization-method-map.md).  Methods
@@ -189,6 +209,8 @@ P102_METHOD_SHAPES = {
     # capture them live before implementing.
 }
 STORE_REFRESH_SENTINEL = 99999
+SLOT_ENTITLEMENT_MIN = 80002
+SLOT_ENTITLEMENT_MAX = 80007
 PROTO_NAMES = {0x0A: "TicketGranting", 0x0B: "SecureConnection",
                0x0E: "GlobalNotificationEvent", 102: "Monetization"}
 
@@ -269,6 +291,14 @@ class EconomyStore:
             owned = set(self.data["owned_items"])
             return [item for item in requested if item in owned]
 
+    def slot_entitlements(self):
+        """Return the persisted purchases that unlock Ludus roster slots."""
+        with self.lock:
+            return [
+                item for item in self.data["owned_items"]
+                if SLOT_ENTITLEMENT_MIN <= item <= SLOT_ENTITLEMENT_MAX
+            ]
+
 
 INVENTORY_PROBE = os.environ.get(
     "SPARTACUS_INVENTORY_PROBE", ""
@@ -329,6 +359,27 @@ def encode_purchase_result(gold, silver, item_id, transaction_time=0, quantity=1
     )
 
 
+def encode_monetization_server_time(value=None, transactions=()):
+    """Encode method 8's transaction list and authoritative UTC time."""
+    if value is None:
+        value = datetime.datetime.now(datetime.timezone.utc)
+    # Parser 0x00018F8C first decodes a structured list and then a Quazal
+    # DateTime.  The client converts that packed calendar value to its internal
+    # epoch before calculating the server/local clock offset.  A Unix timestamp
+    # is the right width but the wrong representation and produces an enormous
+    # signed offset (and therefore multi-million-hour shop countdowns).
+    packed_time = encode_qdatetime(value)
+    transactions = tuple(transactions)
+    return (
+        struct.pack("<I", len(transactions))
+        + b"".join(
+            struct.pack("<IQI", int(item) & 0xFFFFFFFF, packed_time, 1)
+            for item in transactions
+        )
+        + struct.pack("<Q", packed_time)
+    )
+
+
 LOG_PATH = os.environ.get(
     "SPARTACUS_PRUDP_LOG",
     os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -336,6 +387,23 @@ LOG_PATH = os.environ.get(
 )
 _LOG_LOCK = threading.Lock()
 _LOG_CONTEXT = threading.local()
+
+USERSTORAGE_CAPTURE_DIR = os.environ.get(
+    "SPARTACUS_USERSTORAGE_CAPTURE_DIR",
+    os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                 "..", ".build", "userstorage-captures")),
+)
+USERSTORAGE_CAPTURE_ENABLED = os.environ.get(
+    "SPARTACUS_CAPTURE_USERSTORAGE", "1"
+) not in ("", "0")
+_USERSTORAGE_CAPTURE_LOCK = threading.Lock()
+_USERSTORAGE_CAPTURE_COUNTER = 0
+# Authentication and secure PRUDP endpoints run in separate ``main`` threads.
+# Keep the last non-service player identity by peer host so the secure endpoint
+# can label later UserStorage captures.  This server currently hosts one local
+# player; service-account logins (for example Tracking) must not overwrite it.
+_PLAYER_CONTEXT_BY_HOST = {}
+_PLAYER_CONTEXT_LOCK = threading.Lock()
 
 
 def log(msg):
@@ -346,6 +414,99 @@ def log(msg):
         print(line, flush=True)
         with open(LOG_PATH, "a", encoding="utf-8", errors="replace") as f:
             f.write(line + "\n")
+
+
+def capture_userstorage_request(rmc, packet_info, peer, session_state=None):
+    """Persist one protocol-53 request without changing its dispatch path.
+
+    The binary file is exactly ``rmc['params']`` (no decoding or re-encoding),
+    while the JSON sidecar carries enough transport/account context to replay
+    or correlate it later.  Capture failures are deliberately diagnostic-only:
+    a full disk or unwritable directory must never change a server response.
+    Returns the payload path, or ``None`` when capture is disabled/failed.
+    """
+    if not USERSTORAGE_CAPTURE_ENABLED or not rmc \
+            or rmc.get("protocol") != PROTO_USER_STORAGE \
+            or not rmc.get("is_request"):
+        return None
+
+    global _USERSTORAGE_CAPTURE_COUNTER
+    params = bytes(rmc.get("params", b""))
+    state = session_state or {}
+    username = state.get("account_username")
+    account_pid = state.get("account_pid")
+    account_tag = username or (
+        f"pid{int(account_pid):08x}" if account_pid is not None else "unknown"
+    )
+    # Keep account text out of the path except for a conservative correlation
+    # token; the full value remains in the sidecar for investigation.
+    safe_tag = "".join(c if c.isalnum() or c in "._-" else "_"
+                       for c in str(account_tag))[:48] or "unknown"
+    captured_at = datetime.datetime.now(datetime.timezone.utc)
+    stamp = captured_at.strftime("%Y%m%dT%H%M%S%fZ")
+    with _USERSTORAGE_CAPTURE_LOCK:
+        sequence = _USERSTORAGE_CAPTURE_COUNTER
+        _USERSTORAGE_CAPTURE_COUNTER += 1
+
+    stem = (f"{stamp}_{sequence:06d}_{safe_tag}_"
+            f"s{int(packet_info.get('session_id', 0)):02x}_"
+            f"c{int(rmc.get('call_id', 0)):08x}_"
+            f"m{int(rmc.get('method_id', 0)):08x}")
+    directory = os.path.abspath(USERSTORAGE_CAPTURE_DIR)
+    payload_name = stem + ".bin"
+    metadata_name = stem + ".json"
+    payload_path = os.path.join(directory, payload_name)
+    metadata_path = os.path.join(directory, metadata_name)
+    metadata = {
+        "captured_at": captured_at.isoformat(),
+        "protocol": PROTO_USER_STORAGE,
+        "method_id": int(rmc.get("method_id", 0)),
+        "call_id": int(rmc.get("call_id", 0)),
+        "known_method": int(rmc.get("method_id", 0)) in USERSTORAGE_KNOWN_METHODS,
+        "params_length": len(params),
+        "params_sha256": hashlib.sha256(params).hexdigest(),
+        "payload_file": payload_name,
+        "account": {
+            "username": username,
+            "pid": account_pid,
+        },
+        "peer": [str(peer[0]), int(peer[1])] if peer else None,
+        "transport": {
+            "source": int(packet_info.get("source", 0)),
+            "destination": int(packet_info.get("destination", 0)),
+            "session_id": int(packet_info.get("session_id", 0)),
+            "sequence_id": int(packet_info.get("sequence_id", 0)),
+            "signature": int(packet_info.get("signature", 0)),
+        },
+    }
+    try:
+        os.makedirs(directory, exist_ok=True)
+        # Write-and-replace keeps readers from observing a partially written
+        # payload or sidecar while a live probe is collecting requests.
+        payload_tmp = payload_path + f".{os.getpid()}.tmp"
+        metadata_tmp = metadata_path + f".{os.getpid()}.tmp"
+        with open(payload_tmp, "wb") as f:
+            f.write(params)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(payload_tmp, payload_path)
+        with open(metadata_tmp, "w", encoding="utf-8", newline="\n") as f:
+            json.dump(metadata, f, indent=2, sort_keys=True)
+            f.write("\n")
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(metadata_tmp, metadata_path)
+        return payload_path
+    except OSError as error:
+        for temporary in (locals().get("payload_tmp"),
+                          locals().get("metadata_tmp")):
+            if temporary:
+                try:
+                    os.unlink(temporary)
+                except OSError:
+                    pass
+        log(f"   !! UserStorage capture failed ({error})")
+        return None
 
 
 ECONOMY = EconomyStore(os.environ.get(
@@ -478,6 +639,74 @@ def q_string(s: str) -> bytes:
     """Quazal String: u16 length (incl. NUL) then NUL-terminated ASCII."""
     raw = s.encode("ascii") + b"\x00"
     return struct.pack("<H", len(raw)) + raw
+
+
+def encode_user_content_url(protocol: str, host: str, path: str) -> bytes:
+    """Encode UserStorage.UserContentURL(protocol, host, path)."""
+    return q_string(protocol) + q_string(host) + q_string(path)
+
+
+def encode_user_content_upload_result(type_id: int, content_id: int = 1) -> bytes:
+    """Encode UserStorage m6's upload URL, assigned ID, and empty header list."""
+    host = os.environ.get("SPARTACUS_USER_CONTENT_HOST", "127.0.0.1")
+    upload_path = f"/usercontent/{type_id:08x}/{content_id}.bin"
+    return (
+        encode_user_content_url("http://", host, upload_path)
+        + struct.pack("<QI", content_id, 0)
+    )
+
+
+def user_content_path(type_id: int, content_id: int) -> str:
+    directory = os.environ.get(
+        "SPARTACUS_USER_CONTENT_DIR",
+        os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                     "..", "data", "usercontent")),
+    )
+    return os.path.join(directory, f"{type_id:08x}", f"{content_id}.bin")
+
+
+def encode_user_content_rows(type_id: int, content_id: int = 1,
+                             owner_pid: int = USER_PID,
+                             format_version: int | None = None) -> bytes:
+    """Encode one GetOwnContents row and its native format selector."""
+    properties = b""
+    property_count = 0
+    if format_version is not None:
+        # The writer supplies ContentProperty 100 as Variant::I64. The loader
+        # copies it into context +0x10 and uses values 1/2 to select its apply
+        # routine; an omitted property leaves mode 0 and skips application.
+        property_count = 1
+        properties = struct.pack("<IBQ", 100, 1, format_version)
+    return (
+        struct.pack("<IIQII", 1, type_id, content_id, owner_pid,
+                    property_count)
+        + properties
+    )
+
+
+def encode_user_content_download_url(type_id: int, content_id: int = 1) -> bytes:
+    host = os.environ.get("SPARTACUS_USER_CONTENT_HOST", "127.0.0.1")
+    path = f"/usercontent/{type_id:08x}/{content_id}.bin"
+    return encode_user_content_url("http://", host, path)
+
+
+def encode_remote_config_content(type_id: int, content_id: int,
+                                 owner_pid: int, sha256_hex: str) -> bytes:
+    """Encode the Crixus SearchContents row used by remote config.
+
+    Property 101 is the expected uppercase SHA-256 string. Property 5 is the
+    nonzero DateTime/u64-style value used by the row-selection gate. Property
+    100 is the integer revision copied into the applied remote-config state.
+    """
+    digest = sha256_hex.upper()
+    if len(digest) != 64 or any(c not in "0123456789ABCDEF" for c in digest):
+        raise ValueError("remote-config SHA-256 must be 64 hexadecimal digits")
+    return (
+        struct.pack("<IIQII", 1, type_id, content_id, owner_pid, 3)
+        + struct.pack("<IBQ", 5, 5, 1)
+        + struct.pack("<IBQ", 100, 1, 1)
+        + struct.pack("<IB", 101, 4) + q_string(digest)
+    )
 
 
 def read_q_string(buf: bytes, off: int):
@@ -685,6 +914,11 @@ def main(port=None, stop_event=None, ready_event=None, host="0.0.0.0"):
 
     client_conn_sig = {}
     connection_state = {}
+    # Login is normally received on the auth stream before the secure stream
+    # carrying UserStorage traffic is opened. Keep the account context by
+    # peer so the next CONNECT can inherit it, then copy it into that exact
+    # (peer, source-vport) session state.
+    account_context_by_peer = {}
     state_lock = threading.Lock()
     notification_scheduled = set()
     seen = set()
@@ -782,6 +1016,12 @@ def main(port=None, stop_event=None, ready_event=None, host="0.0.0.0"):
                 log(f"   client conn_sig=0x{client_conn_sig[addr]:08x}")
 
                 conn_key = (addr, info["source"])
+                account_context = account_context_by_peer.get(addr)
+                if not account_context:
+                    with _PLAYER_CONTEXT_LOCK:
+                        account_context = dict(
+                            _PLAYER_CONTEXT_BY_HOST.get(addr[0], {})
+                        )
                 with state_lock:
                     # A reconnect reuses the same UDP address/vport key. Let
                     # the new session schedule its own one-shot push.
@@ -794,6 +1034,8 @@ def main(port=None, stop_event=None, ready_event=None, host="0.0.0.0"):
                         "signature": client_conn_sig[addr],
                         "next_seq": (seq + 1) & 0xFFFF,
                         "next_call": 0x70000000,
+                        "account_username": account_context.get("username"),
+                        "account_pid": account_context.get("pid"),
                     }
 
                 # A CONNECT on the SECURE service carries a payload: the
@@ -839,6 +1081,29 @@ def main(port=None, stop_event=None, ready_event=None, host="0.0.0.0"):
                             fragment_id=0)
                 srv.sendto(ack, addr)
                 log("-> DATA|ACK")
+
+                # Preserve UserStorage inputs only after the transport ACK is
+                # on the wire, so filesystem latency cannot perturb the client.
+                if rmc and rmc["is_request"] \
+                        and rmc["protocol"] == PROTO_USER_STORAGE:
+                    capture_key = (addr, info["source"])
+                    with state_lock:
+                        capture_state = dict(
+                            connection_state.get(capture_key, {})
+                        )
+                    capture_path = capture_userstorage_request(
+                        rmc, info, addr, capture_state
+                    )
+                    kind = ("known" if rmc["method_id"] in
+                            USERSTORAGE_KNOWN_METHODS else "UNKNOWN")
+                    if capture_path:
+                        log(f"   *** UserStorage {kind} method="
+                            f"{rmc['method_id']} raw params preserved "
+                            f"({len(rmc['params'])}B) -> {capture_path} ***")
+                    elif rmc["method_id"] not in USERSTORAGE_KNOWN_METHODS:
+                        log(f"   *** UserStorage UNKNOWN method="
+                            f"{rmc['method_id']} raw params="
+                            f"{rmc['params'].hex()} (capture disabled/failed) ***")
 
                 resp_body = None
                 resp_error = None
@@ -918,6 +1183,25 @@ def main(port=None, stop_event=None, ready_event=None, host="0.0.0.0"):
                         username = rmc["params"][2:2 + name_len].rstrip(b"\x00")
                         acct_pid, acct_pwd = ACCOUNTS.get(username,
                                                           (USER_PID, DUMMY_PWD))
+                        username_text = username.decode("utf-8", "replace")
+                        account_context_by_peer[addr] = {
+                            "username": username_text,
+                            "pid": acct_pid,
+                        }
+                        if acct_pid != TRACKING_PID:
+                            with _PLAYER_CONTEXT_LOCK:
+                                _PLAYER_CONTEXT_BY_HOST[addr[0]] = {
+                                    "username": username_text,
+                                    "pid": acct_pid,
+                                }
+                        # Attach the identity to this auth session immediately;
+                        # future secure CONNECTs inherit it by peer above.
+                        auth_key = (addr, info["source"])
+                        with state_lock:
+                            auth_state = connection_state.get(auth_key)
+                            if auth_state is not None:
+                                auth_state["account_username"] = username_text
+                                auth_state["account_pid"] = acct_pid
                         log(f"   *** Login request for user {username!r} "
                             f"-> pid=0x{acct_pid:x} pwd={acct_pwd!r} ***")
                         resp_body = build_login_response(acct_pid, SERVER_PID)
@@ -927,9 +1211,118 @@ def main(port=None, stop_event=None, ready_event=None, host="0.0.0.0"):
                             "<II", rmc["params"], 0)
                         log(f"   *** RequestTicket source=0x{source_pid:08x} "
                             f"target=0x{target_pid:08x} ***")
+                        # This also covers traces where Login was elided from
+                        # the capture: the ticket request still identifies the
+                        # account principal used by the secure session.
+                        account_context_by_peer.setdefault(addr, {})["pid"] = \
+                            source_pid
+                        ticket_key = (addr, info["source"])
+                        with state_lock:
+                            ticket_state = connection_state.get(ticket_key)
+                            if ticket_state is not None:
+                                ticket_state["account_pid"] = source_pid
                         resp_body = build_request_ticket_response(
                             source_pid, target_pid)
                         label = "REQUEST_TICKET"
+
+                elif rmc and rmc["is_request"] \
+                        and rmc["protocol"] == PROTO_USER_STORAGE \
+                        and rmc["method_id"] == 6:
+                    # Native progression writer: declare an external body.
+                    # The captured DDL request places the byte length and
+                    # UserContent type at unaligned offsets 17 and 21.
+                    try:
+                        body_size = struct.unpack_from("<I", rmc["params"], 17)[0]
+                        type_id = struct.unpack_from("<I", rmc["params"], 21)[0]
+                    except struct.error:
+                        body_size, type_id = 0, 0
+                    content_id = 1
+                    resp_body = encode_user_content_upload_result(
+                        type_id, content_id
+                    )
+                    label = "USERSTORAGE_CREATE_UPLOAD"
+                    log(f"   *** UserStorage create upload "
+                        f"type=0x{type_id:08x} size={body_size} "
+                        f"content_id={content_id} ***")
+
+                elif rmc and rmc["is_request"] \
+                        and rmc["protocol"] == PROTO_USER_STORAGE \
+                        and rmc["method_id"] == 7:
+                    # Finalize the external upload. The response is a
+                    # UserContentKey: u32 type ID followed by u64 content ID.
+                    try:
+                        type_id = struct.unpack_from("<I", rmc["params"], 9)[0]
+                        requested_id = struct.unpack_from(
+                            "<Q", rmc["params"], 13
+                        )[0]
+                    except struct.error:
+                        type_id, requested_id = 0, 0
+                    content_id = requested_id or 1
+                    resp_body = struct.pack("<IQ", type_id, content_id)
+                    label = "USERSTORAGE_FINALIZE_UPLOAD"
+                    log(f"   *** UserStorage finalize upload "
+                        f"type=0x{type_id:08x} content_id={content_id} ***")
+
+                elif rmc and rmc["is_request"] \
+                        and rmc["protocol"] == PROTO_USER_STORAGE \
+                        and rmc["method_id"] == 21:
+                    # GetOwnContents(type): return the one persisted key for
+                    # this local player. A missing file is a valid empty list.
+                    try:
+                        type_id = struct.unpack_from("<I", rmc["params"], 0)[0]
+                    except struct.error:
+                        type_id = 0
+                    content_id = 1
+                    content_path = user_content_path(type_id, content_id)
+                    if os.path.isfile(content_path):
+                        format_version = USER_CONTENT_FORMAT_VERSIONS.get(type_id)
+                        resp_body = encode_user_content_rows(
+                            type_id, content_id, USER_PID, format_version
+                        )
+                        row_count = 1
+                    else:
+                        resp_body = struct.pack("<I", 0)
+                        row_count = 0
+                    label = "USERSTORAGE_GET_OWN_CONTENTS"
+                    log(f"   *** UserStorage own contents "
+                        f"type=0x{type_id:08x} rows={row_count}"
+                        + (f" format={format_version}"
+                           if row_count else "")
+                        + " ***")
+
+                elif rmc and rmc["is_request"] \
+                        and rmc["protocol"] == PROTO_USER_STORAGE \
+                        and rmc["method_id"] in (8, 9):
+                    # The title may choose an inline DB body (m8) or an
+                    # external HTTP GET URL (m9) after GetOwnContents. Support
+                    # both with the exact key returned above.
+                    try:
+                        type_id, content_id = struct.unpack_from(
+                            "<IQ", rmc["params"], 0
+                        )
+                    except struct.error:
+                        type_id, content_id = 0, 0
+                    content_path = user_content_path(type_id, content_id)
+                    if rmc["method_id"] == 8:
+                        try:
+                            with open(content_path, "rb") as content_file:
+                                content_body = content_file.read()
+                        except OSError:
+                            content_body = b""
+                        resp_body = struct.pack("<I", len(content_body)) \
+                            + content_body
+                        label = "USERSTORAGE_GET_CONTENT_DB"
+                        log(f"   *** UserStorage inline content "
+                            f"type=0x{type_id:08x} content_id={content_id} "
+                            f"size={len(content_body)} ***")
+                    else:
+                        resp_body = encode_user_content_download_url(
+                            type_id, content_id
+                        )
+                        label = "USERSTORAGE_GET_CONTENT_URL"
+                        log(f"   *** UserStorage download URL "
+                            f"type=0x{type_id:08x} content_id={content_id} "
+                            f"exists={os.path.isfile(content_path)} ***")
 
                 elif rmc and rmc["is_request"] \
                         and rmc["protocol"] == PROTO_MONETIZATION:
@@ -1009,6 +1402,14 @@ def main(port=None, stop_event=None, ready_event=None, host="0.0.0.0"):
                                 f"gold_cost={gold_cost} "
                                 f"silver_cost={silver_cost} -> balances "
                                 f"gold={gold} silver={silver} ***")
+                    elif rmc["method_id"] == 8:     # Enumerate transactions/server time
+                        slot_entitlements = ECONOMY.slot_entitlements()
+                        resp_body = encode_monetization_server_time(
+                            transactions=slot_entitlements
+                        )
+                        label = "MONETIZATION_SERVER_TIME"
+                        log("   *** Monetization server time; replaying slot "
+                            f"entitlements={slot_entitlements} ***")
                     elif rmc["method_id"] == 11:    # Finalize gladiator outcome
                         # Live death trace: this follows m12 (death notice) and
                         # m6 (fight income), carrying <Iii> = (gladiator id,
@@ -1202,9 +1603,12 @@ def main(port=None, stop_event=None, ready_event=None, host="0.0.0.0"):
                     shape = PROTO_OVERRIDES.get(key, GENERIC_BODY)
                     if shape == "user_content_stub":
                         # SearchContents(UserStorageQuery) returns a
-                        # qlist<UserContent>. One metadata record with an
-                        # empty property list is structurally complete and
-                        # should cause the title to request the content body.
+                        # qlist<UserContent>. The Crixus selection loop looks
+                        # up ContentProperty ID 5, requires variant type 5
+                        # (u64), and rejects a zero value before dispatching
+                        # the external-content request. After download it also
+                        # requires property ID 101 as an uppercase SHA-256
+                        # string, then copies integer property ID 100.
                         try:
                             type_id = struct.unpack_from(
                                 "<I", rmc["params"], 0
@@ -1217,14 +1621,20 @@ def main(port=None, stop_event=None, ready_event=None, host="0.0.0.0"):
                         owner_pid = int(os.environ.get(
                             "SPARTACUS_USER_CONTENT_PID", str(USER_PID)
                         ), 0)
-                        resp_body = struct.pack(
-                            "<IIQII", 1, type_id, content_id,
-                            owner_pid, 0
+                        sha256_hex = os.environ.get(
+                            "SPARTACUS_REMOTE_CONFIG_SHA256",
+                            "7913A13830F32D6E2F8314A4A343422C"
+                            "BBC4F0F98ABEB10373C908E9AC7F8E30",
+                        )
+                        resp_body = encode_remote_config_content(
+                            type_id, content_id, owner_pid, sha256_hex
                         )
                         shape = ("user_content_stub["
                                  f"type=0x{type_id:08x}, "
                                  f"content={content_id}, "
-                                 f"pid=0x{owner_pid:08x}, properties=0]")
+                                 f"pid=0x{owner_pid:08x}, "
+                                 "properties=[5:u64(1), 100:i64(1), "
+                                 f"101:string({sha256_hex})]]")
                     elif shape == "echo_list":
                         # e.g. UbiAccountManagement(29) m12: the request is
                         # (u32 count, count x u32 pid) and the response decoder
@@ -1261,6 +1671,16 @@ def main(port=None, stop_event=None, ready_event=None, host="0.0.0.0"):
                         shape = (f"monetization_purchase[gold={gold}, "
                                  f"silver={silver}, id={record_id}, "
                                  f"value={record_value}, state={record_state}]")
+                    elif shape == "external_content_url":
+                        protocol = os.environ.get(
+                            "P53M9_PROTOCOL", "http://")
+                        host = os.environ.get("P53M9_HOST", "127.0.0.1")
+                        path = os.environ.get(
+                            "P53M9_PATH", "/remoteconfig.bin")
+                        resp_body = encode_user_content_url(
+                            protocol, host, path)
+                        shape = (f"external_content_url[protocol={protocol!r}, "
+                                 f"host={host!r}, path={path!r}]")
                     else:
                         resp_body = GENERIC_BODIES.get(shape,
                                                        GENERIC_BODIES["empty"])
@@ -1315,6 +1735,8 @@ def main(port=None, stop_event=None, ready_event=None, host="0.0.0.0"):
                     conn_key = (addr, info["source"])
                     connection_state.pop(conn_key, None)
                     notification_scheduled.discard(conn_key)
+                    if not any(key[0] == addr for key in connection_state):
+                        account_context_by_peer.pop(addr, None)
             else:
                 log(f"   (no handler for {tname})")
     except KeyboardInterrupt:

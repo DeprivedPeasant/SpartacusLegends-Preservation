@@ -15,7 +15,6 @@ import sys
 PPU_HEADER = "PPU-81471d050c14f4d20b4027686f8b571dafd32394:"
 TITLE_ID = "NPUB30746"
 GAME_VERSION = "01.00"
-IPC_PORT = "28012"
 IP_SWAP = "onlineconfigservice.ubi.com=127.0.0.1"
 COMPATIBILITY_PATCH = "Spartacus Legends - Server emulator compatibility"
 MATCHMAKING_PATCH = "Spartacus Legends - Online matchmaking compatibility (experimental)"
@@ -32,7 +31,6 @@ class InstallResult:
     imported_patch: Path
     custom_config: Path
     patch_config: Path
-    ipc_config: Path
     backups: tuple[Path, ...]
     cache_cleared: bool
 
@@ -154,25 +152,6 @@ def merge_section_settings(existing: str, section: str,
     return "\n".join(lines).rstrip() + "\n"
 
 
-def merge_top_level_settings(existing: str, settings: dict[str, str]) -> str:
-    """Set scalar keys in a small top-level RPCS3 YAML document."""
-    lines = existing.splitlines()
-    if lines and lines[0].startswith("\ufeff"):
-        lines[0] = lines[0].lstrip("\ufeff")
-    found: set[str] = set()
-    for index, line in enumerate(lines):
-        if line.startswith((" ", "\t")):
-            continue
-        for key, value in settings.items():
-            if line.startswith(f"{key}:"):
-                lines[index] = f"{key}: {value}"
-                found.add(key)
-                break
-    lines.extend(f"{key}: {value}" for key, value in settings.items()
-                 if key not in found)
-    return "\n".join(lines).rstrip() + "\n"
-
-
 def merge_patch_config(existing: str) -> str:
     """Enable only the required compatibility patch for the supported build."""
     lines = existing.splitlines()
@@ -285,20 +264,11 @@ def install_setup(rpcs3_folder: Path) -> InstallResult:
                       if patch_config.exists() else "")
     patch_contents = merge_patch_config(patch_existing)
 
-    ipc_config = root / "config" / "ipc.yml"
-    ipc_existing = (ipc_config.read_text(encoding="utf-8-sig")
-                    if ipc_config.exists() else "")
-    ipc_contents = merge_top_level_settings(ipc_existing, {
-        "IPC Server enabled": "true",
-        "IPC Port": IPC_PORT,
-    })
-
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     backups: list[Path] = []
     backup_and_write(imported_patch, imported_contents, stamp, backups)
     backup_and_write(custom_config, custom_contents, stamp, backups)
     backup_and_write(patch_config, patch_contents, stamp, backups)
-    backup_and_write(ipc_config, ipc_contents, stamp, backups)
 
     cache = root / "cache" / TITLE_ID
     cache_cleared = cache.exists()
@@ -306,7 +276,7 @@ def install_setup(rpcs3_folder: Path) -> InstallResult:
         shutil.rmtree(cache)
 
     return InstallResult(imported_patch, custom_config, patch_config,
-                         ipc_config, tuple(backups), cache_cleared)
+                         tuple(backups), cache_cleared)
 
 
 def read_param_sfo(path: Path) -> dict[str, str]:
@@ -470,13 +440,6 @@ def verify_setup(rpcs3_folder: Path) -> list[tuple[bool, str, bool]]:
         checks.append((net.get(key) == expected,
                        f"Network setting {key}: {expected}", True))
 
-    ipc_config = root / "config" / "ipc.yml"
-    ipc = parse_indented_map(ipc_config.read_text(encoding="utf-8-sig")
-                             if ipc_config.is_file() else "")
-    checks.append((str(ipc.get("IPC Server enabled", "")).lower() == "true"
-                   and str(ipc.get("IPC Port", "")) == IPC_PORT,
-                   f"RPCS3 IPC server enabled on port {IPC_PORT}", True))
-
     game_problem = game_version_problem(root)
     checks.append((game_problem is None,
                    game_problem or f"Game installed: {TITLE_ID} version {GAME_VERSION}",
@@ -575,7 +538,7 @@ def run(args: argparse.Namespace) -> int:
         return 1
     print(f"Installed Spartacus Legends patches in {result.imported_patch}")
     print(f"Configured the game in {result.custom_config}")
-    print(f"Enabled the compatibility patch and RPCS3 IPC server on port {IPC_PORT}.")
+    print("Enabled the compatibility patch.")
     print("Cleared the game's PPU cache." if result.cache_cleared
           else "The game's PPU cache was already clear.")
     for backup in result.backups:

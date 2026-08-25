@@ -6,6 +6,10 @@
 !.gitignore
 !README.md
 
+!notes/
+notes/*
+!notes/07-v0.4-save-migration-plan.md
+
 !packaging/
 packaging/*
 !packaging/build_release.ps1

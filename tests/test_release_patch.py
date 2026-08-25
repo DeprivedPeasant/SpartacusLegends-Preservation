@@ -11,6 +11,10 @@ REFRESH_COMPLETION_PATCH = (
     "- [ be32, 0x00174A9C, 0x98090022 ] "
     "# accept recruit-pool refresh completion"
 )
+COMMERCE_ENUMERATION_PATCH = (
+    "- [ be32, 0x00105710, 0x38000001 ] "
+    "# supply Commerce readiness to the native save enumerator"
+)
 MATCHMAKING_PATCH = '"Spartacus Legends - Online matchmaking compatibility (experimental)"'
 MATCHMAKING_INSTRUCTIONS = (
     "- [ be32, 0x001ACB80, 0x60000000 ]",
@@ -21,11 +25,13 @@ MATCHMAKING_INSTRUCTIONS = (
 
 
 class ReleasePatchTests(unittest.TestCase):
-    def test_refresh_completion_patch_is_in_both_distributed_yamls(self):
+    def test_required_patch_is_in_both_distributed_yamls(self):
         for path in PATCH_FILES:
             with self.subTest(path=path):
                 contents = path.read_text(encoding="utf-8")
-                self.assertIn('Patch Version: "4.0"', contents)
+                self.assertIn('Patch Version: "4.2"', contents)
+                self.assertIn(COMMERCE_ENUMERATION_PATCH, contents)
+                self.assertNotIn("0x00108798", contents)
                 self.assertIn(REFRESH_COMPLETION_PATCH, contents)
 
     def test_experimental_matchmaking_patch_is_in_both_distributed_yamls(self):

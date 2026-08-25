@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
 from pathlib import Path
 import queue
@@ -66,6 +67,13 @@ def configure_environment(log_dir: Path, secure_port: int,
         "SPARTACUS_PROFILE": str(application_dir() / "data" / "profile.json"),
         "SPARTACUS_PRUDP_LOG": str(log_dir / "prudp.log"),
         "SPARTACUS_CONFIG_LOG": str(log_dir / "online_config.log"),
+        # PyInstaller extracts imported modules beneath a temporary _MEIPASS
+        # directory. Never let the HTTP upload handler derive persistence from
+        # __file__; native user-content must live beside the release executable.
+        "SPARTACUS_USER_CONTENT_DIR": str(
+            application_dir() / "data" / "usercontent"
+        ),
+        "SPARTACUS_USER_CONTENT_HOST": advertise_host,
         "SPARTACUS_ROSTER_PROFILE": str(application_dir() / "data" / "roster.json"),
         "SPARTACUS_CAMPAIGN_PROFILE": str(application_dir() / "data" / "campaign.json"),
         "SPARTACUS_ROSTER_LOG": str(log_dir / "roster_bridge.log"),
@@ -123,7 +131,7 @@ def wait_for_services(ready_events, failures, timeout=5.0):
     return False
 
 
-def parse_args():
+def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--advertise-host", default=None,
@@ -136,9 +144,15 @@ def parse_args():
     parser.add_argument("--auth-port", type=int, default=DEFAULT_AUTH_PORT)
     parser.add_argument("--secure-port", type=int, default=DEFAULT_SECURE_PORT)
     parser.add_argument("--pine-port", type=int, default=DEFAULT_PINE_PORT,
-                        help="RPCS3 IPC/PINE port used for roster persistence")
+                        help="RPCS3 IPC/PINE port used only by the optional "
+                             "legacy roster bridge")
+    parser.add_argument("--legacy-roster-bridge", action="store_true",
+                        help="enable the legacy PINE roster/campaign bridge; "
+                             "normal persistence uses native server storage")
+    # Accepted so existing scripts do not fail after the default changed. It is
+    # now a no-op unless combined with --legacy-roster-bridge.
     parser.add_argument("--no-roster-bridge", action="store_true",
-                        help="disable automatic roster capture/restore")
+                        help=argparse.SUPPRESS)
     parser.add_argument("--check", action="store_true",
                         help="check ports and configuration, then exit")
     parser.add_argument("--recover-legends", type=Path, metavar="RPCS3_FOLDER",
@@ -149,7 +163,7 @@ def parse_args():
                         help="do not pause on a startup error")
     parser.add_argument("--run-seconds", type=float, default=0,
                         help=argparse.SUPPRESS)
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
 def maybe_pause(no_wait: bool) -> None:
@@ -193,6 +207,16 @@ def main() -> int:
     advertise_host = args.advertise_host or "127.0.0.1"
     configure_environment(log_dir, args.secure_port, advertise_host)
 
+    # The remote-config metadata row carries the expected digest of the exact
+    # body served by the HTTP component. Derive it from the same response
+    # builder before prudp_server reads its environment at import time.
+    from UbiOnlineConfigService import spartacus_onlineconfig
+    remote_config_body = spartacus_onlineconfig.make_remote_config_response()
+    os.environ.setdefault(
+        "SPARTACUS_REMOTE_CONFIG_SHA256",
+        hashlib.sha256(remote_config_body).hexdigest().upper(),
+    )
+
     print(f"Spartacus Legends Preservation Server v{VERSION}")
     print(f"Logs: {log_dir}")
     if running_from_temp(base_dir):
@@ -222,8 +246,10 @@ def main() -> int:
     # Import after setting the known-good environment; the protocol module
     # intentionally reads its response matrix once at startup.
     import prudp_server
-    import roster_bridge
-    from UbiOnlineConfigService import spartacus_onlineconfig
+    legacy_roster_bridge = (args.legacy_roster_bridge and
+                            not args.no_roster_bridge)
+    if legacy_roster_bridge:
+        import roster_bridge
 
     stop_event = threading.Event()
     failures = queue.Queue()
@@ -241,7 +267,7 @@ def main() -> int:
         ("Quazal secure", prudp_server.main,
          (args.secure_port, stop_event, ready_secure, args.host)),
     ]
-    if not args.no_roster_bridge:
+    if legacy_roster_bridge:
         components.append(
             ("Roster companion", roster_bridge.run_roster_bridge,
              (stop_event, ready_roster, "127.0.0.1", args.pine_port))
@@ -258,7 +284,7 @@ def main() -> int:
         threads.append(thread)
 
     ready_events = [ready_http, ready_auth, ready_secure]
-    if not args.no_roster_bridge:
+    if legacy_roster_bridge:
         ready_events.append(ready_roster)
     if not wait_for_services(ready_events, failures):
         stop_event.set()
@@ -276,8 +302,9 @@ def main() -> int:
     print("\nAll services are ready.")
     print(f"RPCS3 IP swap: onlineconfigservice.ubi.com={advertise_host}")
     print("Enable patch: Spartacus Legends - Server emulator compatibility")
-    if not args.no_roster_bridge:
-        print(f"Roster persistence: RPCS3 IPC must be enabled on port {args.pine_port}")
+    print(f"Native save persistence: {base_dir / 'data' / 'usercontent'}")
+    if legacy_roster_bridge:
+        print(f"Legacy roster bridge: RPCS3 IPC port {args.pine_port}")
     print("Start the game, log in, and leave this window open.")
     print("Press Ctrl+C to stop the server.\n")
 
