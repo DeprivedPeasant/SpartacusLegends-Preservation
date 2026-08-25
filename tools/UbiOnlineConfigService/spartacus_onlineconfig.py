@@ -82,7 +82,8 @@ def make_remote_config_response() -> bytes:
 
 
 def make_handler(rdv_host: str, rdv_port: int, service_log: ServiceLog,
-                 user_content_dir: Path = DEFAULT_USER_CONTENT_DIR):
+                 user_content_dir: Path = DEFAULT_USER_CONTENT_DIR,
+                 upload_gate=None):
     response_body = make_response(rdv_host, rdv_port)
     remote_config_body = make_remote_config_response()
     user_content_dir = Path(user_content_dir)
@@ -92,6 +93,7 @@ def make_handler(rdv_host: str, rdv_port: int, service_log: ServiceLog,
 
         @staticmethod
         def _user_content_target(route: str):
+            """Return (path, type_id) for a usercontent route, else None."""
             parts = route.strip("/").split("/")
             if len(parts) != 3 or parts[0] != "usercontent" \
                     or not parts[2].endswith(".bin"):
@@ -102,7 +104,7 @@ def make_handler(rdv_host: str, rdv_port: int, service_log: ServiceLog,
             except ValueError:
                 return None
             return (user_content_dir / f"{type_id:08x}" /
-                    f"{content_id}.bin")
+                    f"{content_id}.bin", type_id)
 
         def _send_body(self, status: int, body: bytes,
                        content_type: str = "application/octet-stream") -> None:
@@ -116,8 +118,9 @@ def make_handler(rdv_host: str, rdv_port: int, service_log: ServiceLog,
 
         def _respond(self) -> None:
             parsed = urlparse(self.path)
-            user_content_target = self._user_content_target(parsed.path)
-            if user_content_target is not None:
+            user_content = self._user_content_target(parsed.path)
+            if user_content is not None:
+                user_content_target, type_id = user_content
                 if self.command in ("POST", "PUT"):
                     try:
                         length = int(self.headers.get("Content-Length", "0"))
@@ -129,6 +132,18 @@ def make_handler(rdv_host: str, rdv_port: int, service_log: ServiceLog,
                         )
                         self._send_body(413, b"")
                         return
+                    if upload_gate is not None:
+                        decision = upload_gate.check(type_id, length)
+                        if not decision.allowed:
+                            status = 503 if decision.retryable else 400
+                            service_log.write(
+                                f"{self.command} {self.path} "
+                                f"{'deferred' if decision.retryable else 'rejected'} "
+                                f"length={length} state={decision.state}: "
+                                f"{decision.reason}"
+                            )
+                            self._send_body(status, b"")
+                            return
                     body = self.rfile.read(length)
                     user_content_target.parent.mkdir(parents=True, exist_ok=True)
                     temporary = user_content_target.with_name(
@@ -138,9 +153,14 @@ def make_handler(rdv_host: str, rdv_port: int, service_log: ServiceLog,
                     temporary.write_bytes(body)
                     os.replace(temporary, user_content_target)
                     digest = hashlib.sha256(body).hexdigest()
+                    stored_state = ""
+                    if upload_gate is not None:
+                        stored_state = upload_gate.record_stored(
+                            type_id, len(body)).value
                     service_log.write(
                         f"{self.command} {self.path} stored={len(body)} "
                         f"sha256={digest}"
+                        + (f" state={stored_state}" if stored_state else "")
                     )
                     self._send_body(200, b"")
                     return
@@ -202,13 +222,16 @@ def make_handler(rdv_host: str, rdv_port: int, service_log: ServiceLog,
 
 def serve(host: str = "0.0.0.0", port: int = DEFAULT_HTTP_PORT,
           rdv_host: str = DEFAULT_RDV_HOST, rdv_port: int = DEFAULT_RDV_PORT,
-          log_path: Path = DEFAULT_LOG_PATH, stop_event=None, ready_event=None):
+          log_path: Path = DEFAULT_LOG_PATH, stop_event=None, ready_event=None,
+          upload_gate=None):
     owns_stop_event = stop_event is None
     if stop_event is None:
         stop_event = threading.Event()
     service_log = ServiceLog(Path(log_path))
     server = ThreadingHTTPServer(
-        (host, int(port)), make_handler(rdv_host, int(rdv_port), service_log)
+        (host, int(port)),
+        make_handler(rdv_host, int(rdv_port), service_log,
+                     upload_gate=upload_gate)
     )
     server.timeout = 0.5
     service_log.write(

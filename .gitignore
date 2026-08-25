@@ -4,6 +4,8 @@
 *
 
 !.gitignore
+!AGENTS.md
+!CURRENT_HANDOFF.md
 !README.md
 
 !notes/
@@ -27,6 +29,7 @@ tools/*
 !tools/spartacus_server.py
 !tools/roster_bridge.py
 !tools/legend_recovery.py
+!tools/migration_coordinator.py
 !tools/patch_installer.py
 !tools/UbiOnlineConfigService/
 tools/UbiOnlineConfigService/*
@@ -41,6 +44,10 @@ tests/*
 !tests/test_economy_store.py
 !tests/test_release_patch.py
 !tests/test_patch_installer.py
+!tests/test_migration_coordinator.py
+!tests/test_migration_bridge.py
+!tests/test_migration_upload_gate.py
+!tests/test_migration_launcher.py
 !tests/test_server_startup.py
 
 **/__pycache__/

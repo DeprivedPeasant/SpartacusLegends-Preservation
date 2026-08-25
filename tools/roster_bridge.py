@@ -345,12 +345,57 @@ class RosterSnapshot:
             if any(not _address_in_block(value, block.base) for value in heap_fields):
                 raise ValueError("record contains a pointer outside its relocatable block")
 
+    @staticmethod
+    def _backing_bytes(backing):
+        return b"".join(word.to_bytes(8, "big") for word in backing)
+
+    def slot_is_legend(self, slot):
+        """True when the backing token identifies a recruited Legend.
+
+        Procedural gladiator records can legitimately hold 32-bit values
+        inside the RPCS3 heap band (float data such as 0x3F800000), so the
+        pointer-shape heuristic alone cannot decide whether a record needs
+        its Legend graph resolved. The backing token is the proven
+        discriminator - the same one legend_recovery uses.
+        """
+        return b"_LEGEND_" in self._backing_bytes(self.backings[slot])
+
     def unresolved_slots(self):
         unresolved = []
         for slot, (record, block) in enumerate(zip(self.records, self.blocks)):
-            if block is None and any(_looks_like_pointer(word) for word in record):
+            if block is None and self.slot_is_legend(slot) \
+                    and any(_looks_like_pointer(word) for word in record):
                 unresolved.append(slot)
         return tuple(unresolved)
+
+    def _legacy_root_candidates(self, slot, record, fields):
+        """Candidate Legend block bases for a legacy record, best first.
+
+        A pre-relocatable schema-2 record does not carry the definition root
+        at record+4 (that field is the bridge's own rebased-storage
+        convention); real captures hold zero there and point straight into
+        the live catalog from deeper fields.  The block must start at or
+        below the lowest field and still cover the highest one, so scan
+        downward from the lowest field in 8-byte steps after trying the
+        record+4 root.
+        """
+        candidates = []
+        root = record[0] & 0xFFFFFFFF
+        if HEAP_POINTER_LOW <= root < HEAP_POINTER_HIGH:
+            candidates.append(root)
+        lowest = min(fields)
+        highest = max(fields)
+        scan = lowest & ~7
+        floor = max(HEAP_POINTER_LOW, highest - LEGEND_BLOCK_SIZE + 8)
+        candidates.extend(range(scan, floor - 8, -8))
+        seen = set()
+        unique = []
+        for candidate in candidates:
+            if candidate not in seen and _address_in_block(highest, candidate) \
+                    and _address_in_block(lowest, candidate):
+                seen.add(candidate)
+                unique.append(candidate)
+        return unique
 
     def adopt_legacy_blocks(self, read_block):
         """Return this snapshot with the Legend graphs it lacks read from memory.
@@ -370,21 +415,55 @@ class RosterSnapshot:
         blocks = list(self.blocks)
         for slot in self.unresolved_slots():
             record = self.records[slot]
-            # Same field live capture reads: record+4, the low half of word 0.
-            root = record[0] & 0xFFFFFFFF
-            if not HEAP_POINTER_LOW <= root < HEAP_POINTER_HIGH:
-                raise ValueError(f"slot {slot} has no Legend graph root at record+4")
             fields = _record_heap_fields(record)
-            if any(not _address_in_block(value, root) for value in fields):
-                raise ValueError(f"slot {slot} Legend record escapes its block")
-            words = read_block(root)
-            _validate_legend_block(slot, root, words)
-            for value in fields:
-                if words[(value - root) // 8] == 0:
-                    raise ValueError(
-                        f"slot {slot} Legend graph is absent at 0x{root:08X} this boot"
-                    )
-            blocks[slot] = RelocatableBlock(root, words)
+            if not fields:
+                raise ValueError(f"slot {slot} has no Legend pointers to adopt")
+            adopted = None
+            refusal = None
+            root = record[0] & 0xFFFFFFFF
+            for candidate in self._legacy_root_candidates(slot, record, fields):
+                words = read_block(candidate)
+                if candidate != root:
+                    # Scanned base: a catalog entry begins with a word of
+                    # definition pointers into itself (observed live:
+                    # root+0x10/root+0x20). Without this anchor any
+                    # 8-aligned base containing the record's pointers could
+                    # masquerade as the entry start.
+                    halves = _word_halves(words[0])
+                    if not all(_address_in_block(half, candidate)
+                               for half in halves):
+                        refusal = (f"slot {slot} candidate base "
+                                   f"0x{candidate:08X} has no definition "
+                                   "pointer header")
+                        continue
+                try:
+                    _validate_legend_block(slot, candidate, words)
+                except PineError as error:
+                    refusal = str(error)
+                    continue
+                if any(not _address_in_block(value, candidate) for value in fields):
+                    continue
+                if any(words[(value - candidate) // 8] == 0 for value in fields):
+                    refusal = (f"slot {slot} Legend graph is absent at "
+                               f"0x{candidate:08X} this boot")
+                    continue
+                # A real record points at definition/string data inside the
+                # block. An allocation that is nothing but self-referential
+                # pointers (another process's structures) must not be adopted
+                # as the player's roster.
+                if all(_looks_like_pointer(words[(value - candidate) // 8])
+                       for value in fields):
+                    refusal = (f"slot {slot} candidate block at "
+                               f"0x{candidate:08X} holds no record data")
+                    continue
+                adopted = RelocatableBlock(candidate, words)
+                break
+            if adopted is None:
+                raise ValueError(
+                    f"slot {slot} Legend graph could not be resolved safely "
+                    f"this boot ({refusal or 'no candidate block'})"
+                )
+            blocks[slot] = adopted
         return RosterSnapshot(self.count, self.unlocked_slots, self.records,
                               self.backings, tuple(blocks))
 
@@ -410,7 +489,16 @@ class RosterSnapshot:
                     return destination + (value - block.base)
                 return value
 
-            records.append(tuple(_map_word_halves(word, relocate) for word in record))
+            relocated = tuple(_map_word_halves(word, relocate)
+                              for word in record)
+            # Publish the rebased root at record+4 (low half of word 0).
+            # Retail-era Legend records leave that field empty and point
+            # straight into the catalog; live capture and restore
+            # verification resolve the graph through it, so every
+            # materialized record carries the convention.
+            relocated = ((relocated[0] & ~0xFFFFFFFF) | destination,) \
+                + relocated[1:]
+            records.append(relocated)
             blocks.append(block.rebase(destination))
         return RosterSnapshot(
             self.count, self.unlocked_slots, tuple(records), self.backings, tuple(blocks)
@@ -670,16 +758,18 @@ class RosterBridge:
         return OWNED_BACKING_BASE + slot * BACKING_STRIDE
 
     @staticmethod
-    def _capture_block(client, slot, record_address, record):
+    def _capture_block(client, slot, record_address, record, is_legend):
         root = client.read32(record_address + 4)
         record_heap_fields = _record_heap_fields(record)
         root_is_heap = HEAP_POINTER_LOW <= root < HEAP_POINTER_HIGH
         root_is_arena = LEGEND_ARENA_BASE <= root < LEGEND_ARENA_END
         if not root_is_heap and not root_is_arena:
-            if record_heap_fields:
+            if is_legend and record_heap_fields:
                 raise PineError(
                     f"slot {slot} contains live heap pointers without a Legend block root"
                 )
+            # A procedural record may hold in-band float data; it carries no
+            # relocatable definition graph.
             return None
 
         if record_heap_fields and any(
@@ -742,12 +832,16 @@ class RosterBridge:
                 client.read64(record_address + offset)
                 for offset in range(0, RECORD_STRIDE, 8)
             )
-            records.append(record)
-            backings.append(tuple(
+            backing = tuple(
                 client.read64(backing_address + offset)
                 for offset in range(0, BACKING_STRIDE, 8)
-            ))
-            blocks.append(self._capture_block(client, slot, record_address, record))
+            )
+            records.append(record)
+            backings.append(backing)
+            blocks.append(self._capture_block(
+                client, slot, record_address, record,
+                b"_LEGEND_" in b"".join(
+                    word.to_bytes(8, "big") for word in backing)))
         count_after = client.read32(OWNED_COUNT)
         if count_after != count_before:
             raise PineError("roster changed during capture")
@@ -1129,5 +1223,266 @@ def run_roster_bridge(stop_event, ready_event=None, host="127.0.0.1", port=28012
     bridge = RosterBridge(
         RosterStore(profile_path), BridgeLog(log_path), host, port, poll_seconds,
         campaign_store=CampaignStore(campaign_path),
+    )
+    bridge.run(stop_event, ready_event)
+
+
+class MigrationOutcome:
+    """Terminal result of one object's restore-once attempt."""
+
+    RESTORED = "restored"
+    SKIPPED = "skipped"
+    BLOCKED = "blocked"
+
+
+# Native UserStorage type ids, for the coordinator-facing selection.
+MIGRATION_ROSTER_TYPE = 0x80000003
+MIGRATION_CAMPAIGN_TYPE = 0x80000002
+
+
+class MigrationBridge(RosterBridge):
+    """Restore-once PINE companion for the v0.3 -> v0.4 legacy migration.
+
+    Shares RosterBridge's build, game, pointer, and runtime guards plus its
+    roster/campaign restore code, but never runs the continuous capture loop
+    and never substitutes the game's fallback state for a legacy object:
+
+    - Each selected object is restored at most once per run.
+    - A legacy Legend graph that cannot be resolved safely blocks that type;
+      the source file is preserved untouched and no fallback roster or
+      campaign is written in its place.
+    - An object whose native file became valid while waiting is skipped, not
+      overwritten.
+    - Completion is reported through thread-safe events (one per type, set
+      once uploads for that type may proceed) and caller-supplied callbacks.
+    """
+
+    def __init__(self, store, logger, host="127.0.0.1", port=28012,
+                 poll_seconds=1.0, stable_reads=2, client_factory=PineClient,
+                 campaign_store=None, restore_roster=True,
+                 restore_campaign=True, native_valid=None, callbacks=None):
+        super().__init__(store, logger, host, port, poll_seconds,
+                         stable_reads, client_factory,
+                         campaign_store=campaign_store)
+        if not restore_roster and not restore_campaign:
+            raise ValueError("migration bridge requires at least one object")
+        # Named select_* to avoid shadowing the inherited restore_* methods.
+        self.select_roster = bool(restore_roster)
+        self.select_campaign = bool(restore_campaign)
+        # type_id -> True when the native object is already valid; checked
+        # again immediately before each restore.
+        self.native_valid = native_valid
+        self.callbacks = list(callbacks or ())
+        self._outcome_lock = threading.Lock()
+        self.outcomes = {}
+        # Set once the coordinator may allow native uploads for that type:
+        # after a successful restore, or because a valid native file already
+        # exists. A blocked type never sets its event.
+        self.proceed_events = {
+            MIGRATION_ROSTER_TYPE: threading.Event(),
+            MIGRATION_CAMPAIGN_TYPE: threading.Event(),
+        }
+
+    @property
+    def selected_types(self):
+        selected = []
+        if self.select_roster:
+            selected.append(MIGRATION_ROSTER_TYPE)
+        if self.select_campaign:
+            selected.append(MIGRATION_CAMPAIGN_TYPE)
+        return selected
+
+    def outcome(self, type_id):
+        with self._outcome_lock:
+            return self.outcomes.get(type_id)
+
+    def _finish(self, type_id, result):
+        with self._outcome_lock:
+            if type_id in self.outcomes:
+                return self.outcomes[type_id]
+            self.outcomes[type_id] = result
+        if result in (MigrationOutcome.RESTORED, MigrationOutcome.SKIPPED):
+            self.proceed_events[type_id].set()
+        for callback in self.callbacks:
+            callback(type_id, result)
+        return result
+
+    def _native_already_valid(self, type_id):
+        return self.native_valid is not None and self.native_valid(type_id)
+
+    def _restore_roster_once(self, client):
+        type_id = MIGRATION_ROSTER_TYPE
+        if self._native_already_valid(type_id):
+            self.log.write(
+                "migration: native roster became valid; leaving the live "
+                "roster untouched"
+            )
+            return self._finish(type_id, MigrationOutcome.SKIPPED)
+        try:
+            saved, usable = self._load_saved_roster()
+            if saved is None or not usable:
+                self.log.write(
+                    "migration: roster.json cannot be restored by this "
+                    "build; migration blocked and the file was preserved"
+                )
+                return self._finish(type_id, MigrationOutcome.BLOCKED)
+            if saved.unresolved_slots():
+                saved = self._adopt_legacy_roster(client, saved)
+                if saved is None:
+                    return self._finish(type_id, MigrationOutcome.BLOCKED)
+            if self._native_already_valid(type_id):
+                return self._finish(type_id, MigrationOutcome.SKIPPED)
+            if self.read_snapshot(client) != saved:
+                self.restore_snapshot(client, saved)
+                self.log.write(
+                    f"migration: legacy {saved.count}-gladiator roster "
+                    "restored; waiting for the native upload"
+                )
+            else:
+                self.log.write(
+                    "migration: live roster already matches the legacy "
+                    "snapshot; waiting for the native upload"
+                )
+            return self._finish(type_id, MigrationOutcome.RESTORED)
+        except (PineError, ValueError) as error:
+            self.log.write(
+                f"migration: roster restore failed ({error}); migration "
+                "blocked and roster.json was preserved"
+            )
+            return self._finish(type_id, MigrationOutcome.BLOCKED)
+
+    def _restore_campaign_once(self, client):
+        type_id = MIGRATION_CAMPAIGN_TYPE
+        if self._native_already_valid(type_id):
+            self.log.write(
+                "migration: native campaign became valid; leaving the live "
+                "campaign untouched"
+            )
+            return self._finish(type_id, MigrationOutcome.SKIPPED)
+        try:
+            if self.campaign_store is None:
+                return self._finish(type_id, MigrationOutcome.BLOCKED)
+            try:
+                saved = self.campaign_store.load()
+            except (OSError, ValueError) as error:
+                self.log.write(
+                    f"migration: campaign.json cannot be restored by this "
+                    f"build ({error}); migration blocked and the file was "
+                    "preserved"
+                )
+                return self._finish(type_id, MigrationOutcome.BLOCKED)
+            if saved is None:
+                self.log.write(
+                    "migration: no campaign.json to restore; migration "
+                    "blocked and no fallback campaign was created"
+                )
+                return self._finish(type_id, MigrationOutcome.BLOCKED)
+            if self._native_already_valid(type_id):
+                return self._finish(type_id, MigrationOutcome.SKIPPED)
+            if self.read_campaign(client) != saved:
+                self.restore_campaign(client, saved)
+                self.log.write(
+                    f"migration: restored {len(saved.cells)} campaign "
+                    "completion cell(s); waiting for the native upload"
+                )
+            else:
+                self.log.write(
+                    "migration: live campaign already matches the legacy "
+                    "snapshot; waiting for the native upload"
+                )
+            return self._finish(type_id, MigrationOutcome.RESTORED)
+        except (PineError, ValueError) as error:
+            self.log.write(
+                f"migration: campaign restore failed ({error}); migration "
+                "blocked and campaign.json was preserved"
+            )
+            return self._finish(type_id, MigrationOutcome.BLOCKED)
+
+    def run_migration(self, client, stop_event):
+        """One connection's work: wait for stable state 26, restore once.
+
+        Returns True when every selected type has a terminal outcome, False
+        when stopped first. Never enters the continuous capture loop.
+        """
+        self._validate_game(client)
+        self.log.write(
+            f"migration companion connected to {client.version()} for "
+            f"{EXPECTED_SERIAL}; waiting for post-login state 26"
+        )
+        stable_ready = 0
+        while not stop_event.is_set():
+            if self._ready(client):
+                stable_ready += 1
+                if stable_ready >= self.stable_reads:
+                    break
+            else:
+                stable_ready = 0
+            if self._wait(stop_event):
+                return False
+        for type_id in self.selected_types:
+            if stop_event.is_set():
+                return False
+            if self.outcome(type_id) is not None:
+                continue
+            if type_id == MIGRATION_ROSTER_TYPE:
+                self._restore_roster_once(client)
+            elif type_id == MIGRATION_CAMPAIGN_TYPE:
+                self._restore_campaign_once(client)
+        return True
+
+    def run(self, stop_event, ready_event=None):
+        """Connect, restore each selected object once, then exit.
+
+        Unlike RosterBridge.run this loop ends as soon as every selected
+        type has a terminal outcome; the migration coordinator owns what
+        happens after the native uploads arrive.
+        """
+        if ready_event is not None:
+            ready_event.set()
+        self.log.write(
+            f"migration companion enabled; RPCS3 IPC target "
+            f"{self.host}:{self.port}"
+        )
+        while not stop_event.is_set():
+            if all(self.outcome(t) is not None for t in self.selected_types):
+                self.log.write("migration companion finished")
+                return
+            client = self.client_factory(self.host, self.port)
+            try:
+                client.connect()
+                self.run_migration(client, stop_event)
+            except (OSError, PineError, ValueError,
+                    json.JSONDecodeError) as error:
+                self.log.write(
+                    f"waiting for compatible RPCS3 IPC ({error}); "
+                    "enable RPCS3 IPC on port 28012"
+                )
+                if stop_event.wait(2.0):
+                    return
+            finally:
+                client.close()
+
+
+def run_migration_bridge(stop_event, ready_event=None, host="127.0.0.1",
+                          port=28012, profile_path=None, log_path=None,
+                          poll_seconds=1.0, campaign_path=None,
+                          restore_roster=True, restore_campaign=True,
+                          native_valid=None, callbacks=None):
+    """Entry point the launcher can hand to its component runner (Phase 4)."""
+    base = Path(__file__).resolve().parents[1]
+    profile_path = profile_path or os.environ.get(
+        "SPARTACUS_ROSTER_PROFILE", str(base / "data" / "roster.json")
+    )
+    log_path = log_path or os.environ.get(
+        "SPARTACUS_ROSTER_LOG", str(base / "logs" / "roster_bridge.log")
+    )
+    campaign_path = campaign_path or os.environ.get(
+        "SPARTACUS_CAMPAIGN_PROFILE", str(base / "data" / "campaign.json")
+    )
+    bridge = MigrationBridge(
+        RosterStore(profile_path), BridgeLog(log_path), host, port,
+        poll_seconds, campaign_store=CampaignStore(campaign_path),
+        restore_roster=restore_roster, restore_campaign=restore_campaign,
+        native_valid=native_valid, callbacks=callbacks,
     )
     bridge.run(stop_event, ready_event)

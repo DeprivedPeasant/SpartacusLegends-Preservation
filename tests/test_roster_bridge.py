@@ -48,6 +48,14 @@ class MemoryPine:
         for word_index, word in enumerate(words):
             self.memory64[address + word_index * 8] = word
 
+    def set_legend_token(self, slot, name=b"OENOMAUS"):
+        """Mark a slot's backing as a recruited Legend, as retail does."""
+        token = b"!!GLADIATOR_NAME_LEGEND_" + name
+        backing = rb.OWNED_BACKING_BASE + slot * rb.BACKING_STRIDE
+        for offset in range(0, min(len(token), rb.BACKING_STRIDE - 8), 8):
+            self.memory64[backing + offset] = int.from_bytes(
+                token[offset:offset + 8], "big")
+
     def set_legend(self, slot, root=None):
         root = root or (0x31800000 + slot * 0x1000)
         record = rb.OWNED_BASE + slot * rb.RECORD_STRIDE
@@ -189,6 +197,7 @@ class RosterBridgeTests(unittest.TestCase):
 
     def test_legend_graph_is_captured_relocated_and_round_trips(self):
         source = MemoryPine(count=2)
+        source.set_legend_token(1)
         old_root = source.set_legend(1)
         target = MemoryPine(count=1)
         with tempfile.TemporaryDirectory() as directory:
@@ -213,6 +222,7 @@ class RosterBridgeTests(unittest.TestCase):
 
     def test_legacy_pointerful_roster_is_refused_before_writes(self):
         source = MemoryPine(count=2)
+        source.set_legend_token(1)
         source.set_legend(1)
         target = MemoryPine(count=1)
         with tempfile.TemporaryDirectory() as directory:
@@ -302,6 +312,7 @@ class RosterBridgeTests(unittest.TestCase):
 
     def test_legacy_roster_adopts_this_boots_legend_graph(self):
         source = MemoryPine(count=2)
+        source.set_legend_token(1)
         root = source.set_legend(1)
         # The catalog is still resident at the recorded address, but the live
         # roster is the bare one the game boots with.
@@ -339,6 +350,7 @@ class RosterBridgeTests(unittest.TestCase):
 
     def test_legacy_roster_is_preserved_when_the_catalog_moved(self):
         source = MemoryPine(count=2)
+        source.set_legend_token(1)
         root = source.set_legend(1)
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "roster.json"
@@ -360,6 +372,80 @@ class RosterBridgeTests(unittest.TestCase):
             self.assertEqual(path.read_bytes(), original)
             self.assertEqual(list(Path(directory).glob("roster.json.legacy-*")), [])
             self.assertEqual(absent.writes, [])
+            self.assertEqual(foreign.writes, [])
+
+    def test_schema_two_layout_with_no_record4_root_is_adopted(self):
+        """Real v0.3.10 captures: record+4 is zero, catalog pointer at +0x140.
+
+        The rebased root-at-record+4 convention belongs to the relocatable
+        bridge; retail-era Legend records point straight into the live
+        catalog from deeper fields. Adoption must recover the block base by
+        scanning, not by assuming record+4.
+        """
+        source = MemoryPine(count=3)
+        source.set_legend_token(2)
+        root = source.set_legend(2, root=0x30135400)
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "roster.json"
+            bridge = self.bridge(path)
+            document = bridge.read_snapshot(source).to_dict()
+            document["schema_version"] = 2
+            document.pop("blocks")
+            # Rewrite slot 2 as the retail-era record: +4 empty, one
+            # catalog string pointer at word 40 (record+0x140), exactly
+            # like the real v0.3.10 roster.
+            record = document["records"][2]
+            record[0] = f"{int(record[0], 16) & ~0xFFFFFFFF:016X}"
+            record[5] = "0" * 16  # the real layout has no +0x28 pointer pair
+            record[40] = f"{0x301354C6:016X}"
+            path.write_text(json.dumps(document), encoding="utf-8")
+            legacy = bridge.store.load()
+            self.assertEqual(legacy.unresolved_slots(), (2,))
+
+            # Same boot: the catalog is resident where the record points.
+            target = MemoryPine(count=1)
+            for offset in range(0, rb.LEGEND_BLOCK_SIZE, 8):
+                target.memory64[0x30135400 + offset] = \
+                    (0x30 << 32) | (0x20 + offset)
+            target.memory64[0x30135400] = \
+                (0x30135410) << 32 | (0x30135420)
+
+            migrated = bridge._adopt_legacy_roster(target, legacy)
+            self.assertEqual(migrated.unresolved_slots(), ())
+            self.assertEqual(migrated.blocks[2].base, 0x30135400)
+            # The adopted graph relocates like any captured one.
+            restored = bridge.restore_snapshot(MemoryPine(count=1), migrated)
+            self.assertEqual(restored.blocks[2].base, rb.LEGEND_ARENA_BASE)
+
+    def test_unresolvable_real_layout_roster_stays_refused(self):
+        """A real-layout legacy record whose catalog moved is still refused."""
+        source = MemoryPine(count=2)
+        source.set_legend_token(1)
+        source.set_legend(1, root=0x30135000)
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "roster.json"
+            bridge = self.bridge(path)
+            document = bridge.read_snapshot(source).to_dict()
+            document["schema_version"] = 2
+            document.pop("blocks")
+            record = document["records"][1]
+            record[0] = f"{int(record[0], 16) & ~0xFFFFFFFF:016X}"
+            record[40] = f"{0x301350C6:016X}"
+            path.write_text(json.dumps(document), encoding="utf-8")
+            legacy = bridge.store.load()
+            original = path.read_bytes()
+
+            # This boot has nothing but self-referential garbage where the
+            # catalog used to be: adoption must refuse, not guess.
+            foreign = MemoryPine(count=1)
+            base = 0x30135000
+            for offset in range(0, rb.LEGEND_BLOCK_SIZE, 8):
+                foreign.memory64[base + offset] = \
+                    (base + 0x10) << 32 | (base + 0x20)
+            self.assertIsNone(bridge._adopt_legacy_roster(foreign, legacy))
+            self.assertEqual(path.read_bytes(), original)
             self.assertEqual(foreign.writes, [])
 
 

@@ -174,6 +174,189 @@ def maybe_pause(no_wait: bool) -> None:
             pass
 
 
+MIGRATION_TYPE_NAMES = {
+    0x80000001: "profile",
+    0x80000002: "campaign",
+    0x80000003: "roster",
+}
+
+
+class MigrationController:
+    """Automatic v0.3 -> v0.4 save migration for one server run.
+
+    Owns detection, the timestamped backup, the migration marker, the
+    upload gate, and (only when a PINE-restorable object is actually
+    pending) the restore-once bridge. Fresh and completed installations
+    never reach start(), so they never open a PINE connection.
+    """
+
+    def __init__(self, base_dir: Path, announce=None):
+        import migration_coordinator
+        self.mc = migration_coordinator
+        self.base_dir = Path(base_dir)
+        self.data_dir = self.base_dir / "data"
+        self.announce = announce or print
+        self.report = migration_coordinator.evaluate_installation(
+            self.data_dir)
+        self.gate = None
+        self.pending_types = []
+        self.stop_bridge = threading.Event()
+        self.bridge = None
+        self.completed = threading.Event()
+
+    def _native_valid(self, type_id):
+        info = self.mc.NATIVE_OBJECTS[type_id]
+        path = (self.data_dir / "usercontent" / f"{type_id:08x}" /
+                f"{self.mc.NATIVE_CONTENT_ID}.bin")
+        try:
+            return path.is_file() and path.stat().st_size == info.expected_size
+        except OSError:
+            return False
+
+    def _refresh_assessment(self, type_id, state):
+        assessment = self.report.assessments[type_id]
+        assessment.state = state
+        if state in (self.mc.ObjectState.CAPTURED,
+                     self.mc.ObjectState.COMPLETE):
+            path = (self.data_dir / "usercontent" / f"{type_id:08x}" /
+                    f"{self.mc.NATIVE_CONTENT_ID}.bin")
+            if path.is_file():
+                assessment.native_path = path
+                assessment.native_size = path.stat().st_size
+                assessment.native_sha256 = \
+                    self.mc.native_sha256(path)
+
+    def _write_marker(self, status):
+        self.mc.write_marker(self.data_dir, self.mc.build_marker(
+            self.data_dir, self.report, self.report.backup_path, status))
+
+    def _on_bridge_outcome(self, type_id, result):
+        mc = self.mc
+        name = MIGRATION_TYPE_NAMES.get(type_id, hex(type_id))
+        if result == "restored":
+            self.gate.set_state(type_id, mc.ObjectState.RESTORED)
+            self.announce(f"Legacy {name} restored; waiting for native "
+                          "upload.")
+        elif result == "skipped":
+            self.gate.set_state(type_id, mc.ObjectState.COMPLETE)
+            self._refresh_assessment(type_id, mc.ObjectState.COMPLETE)
+            self.announce(f"Native {name} became valid before restore; "
+                          "left untouched.")
+        else:
+            self.gate.set_state(type_id, mc.ObjectState.BLOCKED)
+            self.announce(
+                f"Migration blocked for the {name}: the legacy source "
+                "cannot be restored safely. Both the legacy file and any "
+                "existing native object were preserved. Resolve the "
+                "condition (or remove the blocked native file only after "
+                "backing it up) and restart the server.")
+
+    def start(self, pine_port: int, log_dir: Path):
+        """Install the upload gate; start PINE only when eligible.
+
+        Returns True when a migration gate is active and must be handed to
+        the OnlineConfig component.
+        """
+        mc = self.mc
+        if not self.report.migration_needed and not self.report.blocked:
+            return False
+
+        if self.report.blocked:
+            # A malformed native object is a recovery condition. Keep the
+            # gate up so no upload can silently replace it, but never start
+            # PINE for it.
+            self.gate = mc.UploadGate.from_report(self.report)
+            for assessment in self.report.assessments.values():
+                if assessment.state is mc.ObjectState.BLOCKED:
+                    self.announce(f"STARTUP WARNING: {assessment.detail}.")
+            self.announce(
+                "Migration is disabled until the malformed object is "
+                "resolved; uploads for it are being rejected.")
+            return True
+
+        backup = mc.create_backup(self.data_dir, self.report)
+        self.report.backup_path = backup
+        self.pending_types = sorted(
+            t for t, a in self.report.assessments.items()
+            if a.state is mc.ObjectState.PENDING)
+        self.gate = mc.UploadGate.from_report(self.report)
+        self._write_marker("pending")
+        self.announce(
+            "Legacy v0.3 save detected; one-time native migration enabled.")
+        self.announce(f"Pre-migration backup: {backup}")
+
+        pine_types = [t for t in self.pending_types if t != 0x80000001]
+        if pine_types:
+            self.announce(
+                f"Waiting for RPCS3 IPC on port {pine_port}. Enable RPCS3 "
+                "IPC (Configuration > GUI) if the game is already running.")
+            import roster_bridge
+            self.bridge = roster_bridge.MigrationBridge(
+                roster_bridge.RosterStore(self.data_dir / "roster.json"),
+                roster_bridge.BridgeLog(log_dir / "roster_bridge.log"),
+                "127.0.0.1", pine_port,
+                campaign_store=roster_bridge.CampaignStore(
+                    self.data_dir / "campaign.json"),
+                restore_roster=0x80000003 in pine_types,
+                restore_campaign=0x80000002 in pine_types,
+                native_valid=self._native_valid,
+                callbacks=[self._on_bridge_outcome],
+            )
+        return True
+
+    def bridge_component(self):
+        """Component tuple for the restore-once bridge, or None."""
+        if self.bridge is None:
+            return None
+        ready = threading.Event()
+        # ready is set immediately by run(); treat the bridge as optional so
+        # a PINE-less machine still boots the migration session.
+        return ("Migration companion", self.bridge.run,
+                (self.stop_bridge, ready))
+
+    def watch(self, stop_event) -> None:
+        """Component loop: track captures and finish the migration."""
+        mc = self.mc
+        announced = set()
+        try:
+            while not stop_event.wait(0.5):
+                blocked = False
+                for type_id in self.pending_types:
+                    state = self.gate.state(type_id)
+                    name = MIGRATION_TYPE_NAMES.get(type_id, hex(type_id))
+                    if state is mc.ObjectState.BLOCKED:
+                        blocked = True
+                        continue
+                    if (state is mc.ObjectState.CAPTURED
+                            and type_id not in announced):
+                        announced.add(type_id)
+                        self._refresh_assessment(
+                            type_id, mc.ObjectState.CAPTURED)
+                        size = self.report.assessments[type_id].native_size
+                        self.announce(
+                            f"Native {name} upload verified ({size} bytes).")
+                        self._write_marker("pending")
+                if blocked:
+                    self.stop_bridge.set()
+                    self._write_marker("blocked")
+                    return
+                if all(self.gate.state(t) in (mc.ObjectState.CAPTURED,
+                                              mc.ObjectState.COMPLETE)
+                       for t in self.pending_types):
+                    for type_id in self.pending_types:
+                        if self.gate.state(type_id) is mc.ObjectState.CAPTURED:
+                            self._refresh_assessment(
+                                type_id, mc.ObjectState.COMPLETE)
+                    self._write_marker("complete")
+                    self.announce(
+                        "Migration complete. PINE is no longer required.")
+                    self.stop_bridge.set()
+                    self.completed.set()
+                    return
+        finally:
+            self.stop_bridge.set()
+
+
 def main() -> int:
     # Keep this window readable when a user pipes it into a log file: unbuffered
     # stderr would otherwise overtake the buffered startup messages.
@@ -258,10 +441,21 @@ def main() -> int:
     ready_secure = threading.Event()
     ready_roster = threading.Event()
 
+    # Automatic legacy migration runs only in normal native mode; the
+    # explicit --legacy-roster-bridge recovery/debug mode stays separate.
+    migration = None
+    if not legacy_roster_bridge:
+        migration = MigrationController(base_dir)
+        migration.start(args.pine_port, log_dir)
+
+    onlineconfig_args = (args.host, args.http_port, advertise_host,
+                         args.auth_port, log_dir / "online_config.log",
+                         stop_event, ready_http)
+    if migration is not None and migration.gate is not None:
+        onlineconfig_args += (migration.gate,)
+
     components = [
-        ("OnlineConfig", spartacus_onlineconfig.serve,
-         (args.host, args.http_port, advertise_host, args.auth_port,
-          log_dir / "online_config.log", stop_event, ready_http)),
+        ("OnlineConfig", spartacus_onlineconfig.serve, onlineconfig_args),
         ("Quazal auth", prudp_server.main,
          (args.auth_port, stop_event, ready_auth, args.host)),
         ("Quazal secure", prudp_server.main,
@@ -272,6 +466,12 @@ def main() -> int:
             ("Roster companion", roster_bridge.run_roster_bridge,
              (stop_event, ready_roster, "127.0.0.1", args.pine_port))
         )
+    if migration is not None:
+        bridge_component = migration.bridge_component()
+        if bridge_component is not None:
+            components.append(bridge_component)
+            components.append(
+                ("Migration coordinator", migration.watch, (stop_event,)))
     threads = []
     for name, target, component_args in components:
         thread = threading.Thread(
@@ -286,6 +486,8 @@ def main() -> int:
     ready_events = [ready_http, ready_auth, ready_secure]
     if legacy_roster_bridge:
         ready_events.append(ready_roster)
+    # The migration components manage their own readiness: the restore-once
+    # bridge waits for RPCS3 IPC, which may not exist yet.
     if not wait_for_services(ready_events, failures):
         stop_event.set()
         if not failures.empty():
