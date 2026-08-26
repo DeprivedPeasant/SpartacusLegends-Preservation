@@ -61,12 +61,23 @@ class TempRelease:
         path.write_bytes(b"\x00" * size)
         return path
 
-    def controller(self):
+    def controller(self, title_version=None):
         return MigrationController(
-            self.base, announce=self.messages.append)
+            self.base, announce=self.messages.append,
+            title_version=title_version)
 
 
 class LauncherMigrationTests(unittest.TestCase):
+    def test_v106_ignores_v100_legacy_sources_and_never_opens_pine(self):
+        with TempRelease() as release:
+            release.write_legacy(roster=True, campaign=True, profile=True)
+            controller = release.controller("01.06")
+            self.assertFalse(controller.report.migration_needed)
+            self.assertFalse(controller.start(28012, release.base / "logs"))
+            self.assertIsNone(controller.gate)
+            self.assertIsNone(controller.bridge)
+            self.assertFalse(release.messages)
+
     def test_fresh_install_starts_no_migration_and_no_gate(self):
         with TempRelease() as release:
             controller = release.controller()

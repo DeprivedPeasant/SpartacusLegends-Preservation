@@ -11,10 +11,30 @@ import shutil
 import subprocess
 import sys
 
+try:
+    from server_config import (
+        config_path as server_config_path,
+        encode_title_version,
+        read_title_version,
+    )
+except ImportError:  # Imported as tools.patch_installer by the unit tests.
+    from tools.server_config import (
+        config_path as server_config_path,
+        encode_title_version,
+        read_title_version,
+    )
 
-PPU_HEADER = "PPU-81471d050c14f4d20b4027686f8b571dafd32394:"
+
+# Every supported build, keyed by PARAM.SFO APP_VER. RPCS3 selects a patch
+# section by the running executable's PPU hash, so both sections are always
+# installed and enabled; only the matching one applies.
+SUPPORTED_BUILDS = {
+    "01.00": "PPU-81471d050c14f4d20b4027686f8b571dafd32394:",
+    "01.06": "PPU-131aece6ae8526d13307be925f48c87f73c43799:",
+}
 TITLE_ID = "NPUB30746"
 GAME_VERSION = "01.00"
+PPU_HEADER = SUPPORTED_BUILDS[GAME_VERSION]
 IP_SWAP = "onlineconfigservice.ubi.com=127.0.0.1"
 COMPATIBILITY_PATCH = "Spartacus Legends - Server emulator compatibility"
 MATCHMAKING_PATCH = "Spartacus Legends - Online matchmaking compatibility (experimental)"
@@ -31,6 +51,8 @@ class InstallResult:
     imported_patch: Path
     custom_config: Path
     patch_config: Path
+    server_config: Path
+    title_version: str
     backups: tuple[Path, ...]
     cache_cleared: bool
 
@@ -54,10 +76,11 @@ def ppu_block_end(lines: list[str], start: int) -> int:
     return len(lines)
 
 
-def remove_project_patches(lines: list[str]) -> tuple[list[str], bool]:
+def remove_project_patches(lines: list[str], ppu_header: str = PPU_HEADER
+                           ) -> tuple[list[str], bool]:
     """Remove just this project's named entries from its PPU section."""
     try:
-        section_start = lines.index(PPU_HEADER)
+        section_start = lines.index(ppu_header)
     except ValueError:
         return lines, False
 
@@ -76,10 +99,46 @@ def remove_project_patches(lines: list[str]) -> tuple[list[str], bool]:
     return result, True
 
 
-def supplied_entries(template: str) -> list[str]:
+def supplied_entries(template: str, ppu_header: str = PPU_HEADER
+                     ) -> list[str]:
     lines = template.splitlines()
-    start = lines.index(PPU_HEADER) + 1
+    if ppu_header not in lines:
+        return []
+    start = lines.index(ppu_header) + 1
     return lines[start:ppu_block_end(lines, start - 1)]
+
+
+def _merge_one_section(existing_lines: list[str], template: str,
+                       ppu_header: str) -> list[str]:
+    remaining, found = remove_project_patches(existing_lines, ppu_header)
+    entries = supplied_entries(template, ppu_header)
+    while entries and not entries[0].strip():
+        entries.pop(0)
+    while entries and not entries[-1].strip():
+        entries.pop()
+    if not entries:
+        return remaining
+    if found:
+        # Stay inside this PPU section: a later section's entries must never
+        # be treated as this one's insertion point.
+        section_start = remaining.index(ppu_header)
+        section_end = ppu_block_end(remaining, section_start)
+        insert_at = section_start + 1
+        while (insert_at < section_end
+               and not remaining[insert_at].startswith('  "')):
+            insert_at += 1
+        # Collapse any blank run left behind by a previous merge so repeated
+        # installs are idempotent.
+        while (insert_at > section_start + 1
+               and not remaining[insert_at - 1].strip()):
+            insert_at -= 1
+        tail = remaining[insert_at:]
+        while tail and not tail[0].strip():
+            tail.pop(0)
+        return (remaining[:insert_at] + [""] + entries
+                + ([""] + tail if tail else []))
+    return (remaining + ([""] if remaining[-1:] != [""] else [])
+            + [ppu_header, ""] + entries)
 
 
 def merge_patch(existing: str, template: str) -> str:
@@ -92,15 +151,9 @@ def merge_patch(existing: str, template: str) -> str:
     if not existing_lines[0].startswith("Version:"):
         raise ValueError("imported_patch.yml does not begin with a Version header")
 
-    remaining, found = remove_project_patches(existing_lines)
-    entries = supplied_entries(template)
-    if found:
-        insert_at = remaining.index(PPU_HEADER) + 1
-        while insert_at < len(remaining) and not remaining[insert_at].startswith('  "'):
-            insert_at += 1
-        merged = remaining[:insert_at] + [""] + entries + remaining[insert_at:]
-    else:
-        merged = remaining + ([""] if remaining[-1:] != [""] else []) + [PPU_HEADER, ""] + entries
+    merged = existing_lines
+    for ppu_header in SUPPORTED_BUILDS.values():
+        merged = _merge_one_section(merged, template, ppu_header)
     return "\n".join(merged).rstrip() + "\n"
 
 
@@ -152,19 +205,16 @@ def merge_section_settings(existing: str, section: str,
     return "\n".join(lines).rstrip() + "\n"
 
 
-def merge_patch_config(existing: str) -> str:
-    """Enable only the required compatibility patch for the supported build."""
-    lines = existing.splitlines()
-    if lines and lines[0].startswith("\ufeff"):
-        lines[0] = lines[0].lstrip("\ufeff")
+def _enable_in_section(lines: list[str], ppu_header: str,
+                       version: str) -> list[str]:
     try:
-        section_start = lines.index(PPU_HEADER)
+        section_start = lines.index(ppu_header)
         section_end = ppu_block_end(lines, section_start)
     except ValueError:
         if lines and lines[-1]:
             lines.append("")
         section_start = len(lines)
-        lines.append(PPU_HEADER)
+        lines.append(ppu_header)
         section_end = len(lines)
 
     index = section_start + 1
@@ -179,6 +229,10 @@ def merge_patch_config(existing: str) -> str:
                 if lines[remove_end].strip() and indent <= 2:
                     break
                 remove_end += 1
+            # Keep the blank line that separates this PPU section from the
+            # next one so repeated installs stay idempotent.
+            while remove_end > index + 1 and not lines[remove_end - 1].strip():
+                remove_end -= 1
             del lines[index:remove_end]
             section_end -= remove_end - index
             continue
@@ -188,10 +242,24 @@ def merge_patch_config(existing: str) -> str:
         f"  {COMPATIBILITY_PATCH}:",
         "    Spartacus Legends:",
         f"      {TITLE_ID}:",
-        "        01.00:",
+        f"        {version}:",
         "          Enabled: true",
     ]
     lines[section_start + 1:section_start + 1] = block
+    return lines
+
+
+def merge_patch_config(existing: str) -> str:
+    """Enable the required compatibility patch for every supported build."""
+    lines = existing.splitlines()
+    if lines and lines[0].startswith("\ufeff"):
+        lines[0] = lines[0].lstrip("\ufeff")
+    # RPCS3 writes a lone "{}" document for an empty patch_config.yml.
+    # Appending block mappings after it would not parse.
+    if [line for line in lines if line.strip()] == ["{}"]:
+        lines = []
+    for version, ppu_header in SUPPORTED_BUILDS.items():
+        lines = _enable_in_section(lines, ppu_header, version)
     return "\n".join(lines).rstrip() + "\n"
 
 
@@ -233,8 +301,12 @@ def install_patch(rpcs3_folder: Path) -> tuple[Path, Path | None]:
     return target, backup
 
 
-def install_setup(rpcs3_folder: Path) -> InstallResult:
+def install_setup(rpcs3_folder: Path,
+                  server_base_dir: Path | None = None) -> InstallResult:
     root = find_rpcs3_root(rpcs3_folder)
+    server_base_dir = (application_dir() if server_base_dir is None
+                       else Path(server_base_dir))
+    title_version = installed_game_version(root)
     template_path = supplied_patch_path()
     if not template_path.is_file():
         raise FileNotFoundError(f"Supplied patch file is missing: {template_path}")
@@ -263,12 +335,15 @@ def install_setup(rpcs3_folder: Path) -> InstallResult:
     patch_existing = (patch_config.read_text(encoding="utf-8-sig")
                       if patch_config.exists() else "")
     patch_contents = merge_patch_config(patch_existing)
+    server_config = server_config_path(server_base_dir)
+    server_config_contents = encode_title_version(title_version)
 
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     backups: list[Path] = []
     backup_and_write(imported_patch, imported_contents, stamp, backups)
     backup_and_write(custom_config, custom_contents, stamp, backups)
     backup_and_write(patch_config, patch_contents, stamp, backups)
+    backup_and_write(server_config, server_config_contents, stamp, backups)
 
     cache = root / "cache" / TITLE_ID
     cache_cleared = cache.exists()
@@ -276,7 +351,8 @@ def install_setup(rpcs3_folder: Path) -> InstallResult:
         shutil.rmtree(cache)
 
     return InstallResult(imported_patch, custom_config, patch_config,
-                         tuple(backups), cache_cleared)
+                         server_config, title_version, tuple(backups),
+                         cache_cleared)
 
 
 def read_param_sfo(path: Path) -> dict[str, str]:
@@ -347,12 +423,27 @@ def game_version_problem(root: Path) -> str | None:
     if title_id and title_id != TITLE_ID:
         return (f"The game installed here is {title_id}, not {TITLE_ID}. Only the USA "
                 "release is supported.")
-    if version and version != GAME_VERSION:
-        return (f"The installed game is version {version}, not {GAME_VERSION}. The patch "
-                "only matches version 01.00, so it will not apply. Remove the game's "
-                "update data (Manage > Title Database, or delete "
-                f"dev_hdd0/game/{TITLE_ID}-UPDATE) and reinstall the base game.")
+    if version and version not in SUPPORTED_BUILDS:
+        supported = " or ".join(SUPPORTED_BUILDS)
+        return (f"The installed game is version {version}. Only {supported} are "
+                "supported, so the patch will not apply. Either update to "
+                "01.06 or remove the game's update data (Manage > Title "
+                f"Database, or delete dev_hdd0/game/{TITLE_ID}-UPDATE) and "
+                "reinstall the base game.")
     return None
+
+
+def installed_game_version(root: Path) -> str:
+    """PARAM.SFO APP_VER of the installed game, or the default build."""
+    sfo = find_param_sfo(root)
+    if sfo is None:
+        return GAME_VERSION
+    try:
+        fields = read_param_sfo(sfo)
+    except (OSError, ValueError):
+        return GAME_VERSION
+    version = fields.get("APP_VER") or fields.get("VERSION", "")
+    return version if version in SUPPORTED_BUILDS else GAME_VERSION
 
 
 def rpcn_problem(root: Path) -> str | None:
@@ -406,29 +497,56 @@ def lookup(tree: dict, *keys: str):
     return node
 
 
-def verify_setup(rpcs3_folder: Path) -> list[tuple[bool, str, bool]]:
+def verify_setup(rpcs3_folder: Path,
+                 server_base_dir: Path | None = None
+                 ) -> list[tuple[bool, str, bool]]:
     """Re-read RPCS3's own files and report what is actually configured.
 
     Each check is (passed, message, required).  Required checks cover what this
     installer writes; the rest describe the surrounding setup the user owns.
     """
     root = find_rpcs3_root(rpcs3_folder)
+    server_base_dir = (application_dir() if server_base_dir is None
+                       else Path(server_base_dir))
     checks: list[tuple[bool, str, bool]] = []
+
+    version = installed_game_version(root)
+    ppu_header = SUPPORTED_BUILDS[version]
+
+    config = server_config_path(server_base_dir)
+    try:
+        configured_version = read_title_version(config)
+        config_error = None
+    except ValueError as error:
+        configured_version = None
+        config_error = str(error)
+    if config_error:
+        config_message = config_error
+    elif configured_version is None:
+        config_message = f"Server version configuration is missing: {config}"
+    elif configured_version != version:
+        config_message = (f"Server is configured for game version "
+                          f"{configured_version}, but RPCS3 has {version}: "
+                          f"{config}")
+    else:
+        config_message = (f"Server configured for game version {version} "
+                          f"in {config}")
+    checks.append((configured_version == version, config_message, True))
 
     imported = root / "patches" / "imported_patch.yml"
     text = imported.read_text(encoding="utf-8-sig") if imported.is_file() else ""
-    installed = PPU_HEADER in text and f'  "{COMPATIBILITY_PATCH}":' in text
+    installed = ppu_header in text and f'  "{COMPATIBILITY_PATCH}":' in text
     checks.append((installed, f"Compatibility patch installed in {imported}", True))
 
     patch_config = root / "config" / "patch_config.yml"
     config_text = (patch_config.read_text(encoding="utf-8-sig")
                    if patch_config.is_file() else "")
-    enabled = lookup(parse_indented_map(config_text), PPU_HEADER.rstrip(":"),
+    enabled = lookup(parse_indented_map(config_text), ppu_header.rstrip(":"),
                      COMPATIBILITY_PATCH, "Spartacus Legends", TITLE_ID,
-                     GAME_VERSION, "Enabled")
+                     version, "Enabled")
     checks.append((str(enabled).lower() == "true",
                    "Compatibility patch enabled for "
-                   f"{TITLE_ID} {GAME_VERSION} in {patch_config}", True))
+                   f"{TITLE_ID} {version} in {patch_config}", True))
 
     custom_config = root / "config" / "custom_configs" / f"config_{TITLE_ID}.yml"
     net = lookup(parse_indented_map(
@@ -442,10 +560,26 @@ def verify_setup(rpcs3_folder: Path) -> list[tuple[bool, str, bool]]:
 
     game_problem = game_version_problem(root)
     checks.append((game_problem is None,
-                   game_problem or f"Game installed: {TITLE_ID} version {GAME_VERSION}",
+                   game_problem or f"Game installed: {TITLE_ID} version {version}",
                    False))
     rpcn = rpcn_problem(root)
     checks.append((rpcn is None, rpcn or "RPCN account configured", False))
+    raw_bind_address = net.get("Bind address", "")
+    # parse_indented_map represents an explicitly empty YAML scalar ('' or
+    # blank) as an empty mapping. Only a real scalar address is actionable.
+    bind_address = (raw_bind_address.strip()
+                    if isinstance(raw_bind_address, str) else "")
+    if bind_address and bind_address not in {"0.0.0.0", "127.0.0.1"}:
+        checks.append((
+            False,
+            f"RPCS3 Bind address is {bind_address}. The default loopback "
+            "server cannot be reached from a bound game socket. Either clear "
+            "Bind address for a normal single-client setup, or start "
+            "SpartacusLegendsServer.exe with --host 0.0.0.0 "
+            "--advertise-host <server-LAN-IP>. The advertised host is the "
+            "server address RPCS3 can reach, not RPCS3's Bind address.",
+            False,
+        ))
     return checks
 
 
@@ -538,6 +672,8 @@ def run(args: argparse.Namespace) -> int:
         return 1
     print(f"Installed Spartacus Legends patches in {result.imported_patch}")
     print(f"Configured the game in {result.custom_config}")
+    print(f"Configured the server for game version {result.title_version} "
+          f"in {result.server_config}")
     print("Enabled the compatibility patch.")
     print("Cleared the game's PPU cache." if result.cache_cleared
           else "The game's PPU cache was already clear.")

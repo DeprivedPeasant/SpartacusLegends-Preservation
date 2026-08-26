@@ -161,20 +161,70 @@ PROTO_SECURE = 0x0B          # SecureConnectionProtocol
 PROTO_NOTIFICATION = 0x0E    # GlobalNotificationEventProtocol (live-confirmed)
 PROTO_MONETIZATION = 102
 PROTO_USER_STORAGE = 53
+# 01.06 only. Tournament method 7 is GetJoinedSeason.  The Wager Match menu
+# waits for this call to decode successfully; a generic empty body completes
+# at the transport layer but leaves the action in its loading state.
+PROTO_TOURNAMENT = 105
+# 01.06 only. Registered as PatchVersion; see notes/13-v106-port.md. It has
+# exactly two methods and blocks the 01.06 boot until method 1 is answered.
+#
+# NOTE ON NAMING: both builds actually assign 101 to the Monetization protocol
+# and 102 to the Shop protocol. PROTO_MONETIZATION above is therefore a
+# misnomer for protocol 102 (= Shop); the wire behaviour it implements was
+# derived empirically and is correct. The name is kept to avoid churning the
+# server, tests, and shipped documentation at once.
+PROTO_PATCH_VERSION = 106
+# Additional 01.06-only services. Their inactive response bodies below are
+# derived from the retail client's response decoders, not guessed qResult
+# placeholders. See notes/13-v106-port.md for the parser addresses.
+PROTO_LOGIN_REWARD = 107
+PROTO_DAILY_POPUP = 108
+PROTO_CHALLENGE = 109
+PROTO_COMMUNITY_BOSS_FIGHT = 110
+
+# Protocol 106 method 1's client-side decoder reads exactly five u32 fields.
+# CheckPatchVersions (0x00278DD8 in 01.06) compares fields 0, 1 and 2 against
+# s_application +0x1A08/+0x1A0C/+0x1A10. Live 2026-08-26 those app fields
+# were 3, 2, 2 even though the served remote config has no
+# SetX360CPTUVersions / SetPS3SCEAPatchVersion / SetPS3SCEEPatchVersion
+# keys, so the default body is [3, 2, 2, 0, 0] not zeros.
+#
+# Override any field live without a code change:
+#   P106M1_0=..  P106M1_1=..  P106M1_2=..  P106M1_3=..  P106M1_4=..
+PATCH_VERSION_FIELDS = 5
+DEFAULT_PATCH_VERSIONS = (3, 2, 2, 0, 0)
 
 # UserStorage is still being probed method-by-method.  Keep the two response
 # shapes currently understood out of the "unknown" diagnostic, but capture
 # every request so a future method cannot be lost in the generic fallback.
 USERSTORAGE_KNOWN_METHODS = frozenset((1, 6, 7, 8, 9, 21))
 
-# ContentProperty 100 selects the title's native payload layout. Format 2's
-# type-1 branch accepts the writer's full 0x1238-byte profile object; format 1
-# is the older 0x1160-byte layout.
-USER_CONTENT_FORMAT_VERSIONS = {
-    0x80000001: 2,
-    0x80000002: 1,
-    0x80000003: 2,
+# ContentProperty 100 selects the title's native payload apply routine. These
+# are the exact Variant::I64 values captured in each title's method-6 upload
+# request, so enumeration must replay the map for the running title version.
+USER_CONTENT_FORMAT_VERSIONS_BY_TITLE = {
+    "01.00": {
+        0x80000001: 2,
+        0x80000002: 1,
+        0x80000003: 2,
+    },
+    "01.06": {
+        0x80000001: 5,
+        0x80000002: 2,
+        0x80000003: 4,
+    },
 }
+# Retain the historical name for callers that explicitly mean the 01.00 map.
+USER_CONTENT_FORMAT_VERSIONS = USER_CONTENT_FORMAT_VERSIONS_BY_TITLE["01.00"]
+
+
+def user_content_format_version(type_id, title_version=None):
+    if title_version is None:
+        title_version = os.environ.get("SPARTACUS_TITLE_VERSION", "01.00")
+    formats = USER_CONTENT_FORMAT_VERSIONS_BY_TITLE.get(title_version)
+    if formats is None:
+        formats = USER_CONTENT_FORMAT_VERSIONS_BY_TITLE["01.00"]
+    return formats.get(type_id)
 
 # Response shapes recovered from the client's OWN response parser (parser
 # 0x00018C4C, 15 methods - see notes/05-monetization-method-map.md).  Methods
@@ -212,7 +262,10 @@ STORE_REFRESH_SENTINEL = 99999
 SLOT_ENTITLEMENT_MIN = 80002
 SLOT_ENTITLEMENT_MAX = 80007
 PROTO_NAMES = {0x0A: "TicketGranting", 0x0B: "SecureConnection",
-               0x0E: "GlobalNotificationEvent", 102: "Monetization"}
+               0x0E: "GlobalNotificationEvent", 102: "Monetization",
+               105: "Tournament", 106: "PatchVersion",
+               107: "LoginReward", 108: "DailyPopup",
+               109: "Challenge", 110: "CommunityBossFight"}
 
 
 class EconomyStore:
@@ -223,7 +276,15 @@ class EconomyStore:
         self.lock = threading.RLock()
         # Confirmed clean post-tutorial economy. Existing JSON profiles always
         # override these values, so upgrades preserve their current balances.
-        self.data = {"version": 1, "gold": 0, "silver": 200, "owned_items": []}
+        self.data = {
+            "version": 1,
+            "gold": 0,
+            "silver": 200,
+            "fame": 0,
+            "owned_items": [],
+            "claimed_challenges": [],
+            "daily_challenges": {"date": "", "claimed": []},
+        }
         self._load()
 
     def _load(self):
@@ -232,6 +293,9 @@ class EconomyStore:
                 loaded = json.load(f)
             self.data["gold"] = max(0, int(loaded.get("gold", 0)))
             self.data["silver"] = max(0, int(loaded.get("silver", 0)))
+            # Fame was not stored by releases before the 01.06 Shop method-20
+            # path was recovered. Missing values migrate safely from zero.
+            self.data["fame"] = max(0, int(loaded.get("fame", 0)))
             # Older server builds treated the recruitment-store refresh
             # command (99999) as a normal item purchase.  It is not an item
             # and must never be returned by RequestInventory.
@@ -240,6 +304,24 @@ class EconomyStore:
                 for item in loaded.get("owned_items", [])
                 if (int(item) & 0xFFFFFFFF) != STORE_REFRESH_SENTINEL
             })
+            self.data["claimed_challenges"] = sorted({
+                int(challenge_id)
+                for challenge_id in loaded.get("claimed_challenges", [])
+                if 1 <= int(challenge_id) <= 72
+            })
+            daily = loaded.get("daily_challenges", {})
+            if not isinstance(daily, dict):
+                daily = {}
+            daily_date = str(daily.get("date", ""))
+            daily_claimed = sorted({
+                int(challenge_id)
+                for challenge_id in daily.get("claimed", [])
+                if 52 <= int(challenge_id) <= 72
+            })
+            self.data["daily_challenges"] = {
+                "date": daily_date,
+                "claimed": daily_claimed,
+            }
         except FileNotFoundError:
             pass
         except (OSError, ValueError, TypeError, json.JSONDecodeError) as error:
@@ -262,6 +344,19 @@ class EconomyStore:
             self.data["silver"] = max(0, self.data["silver"] + silver_delta)
             self._save()
             return self.data["gold"], self.data["silver"]
+
+    def add_rewards(self, gold_delta, silver_delta, fame_delta):
+        """Atomically apply the three reward currencies used by 01.06."""
+        with self.lock:
+            self.data["gold"] = max(0, self.data["gold"] + gold_delta)
+            self.data["silver"] = max(0, self.data["silver"] + silver_delta)
+            self.data["fame"] = max(0, self.data["fame"] + fame_delta)
+            self._save()
+            return (
+                self.data["gold"],
+                self.data["silver"],
+                self.data["fame"],
+            )
 
     def purchase(self, item_id, gold_cost, silver_cost):
         with self.lock:
@@ -298,6 +393,58 @@ class EconomyStore:
                 item for item in self.data["owned_items"]
                 if SLOT_ENTITLEMENT_MIN <= item <= SLOT_ENTITLEMENT_MAX
             ]
+
+    def claim_challenge_reward(self, reward, daily=False, claim_date=None):
+        """Credit one retail challenge reward exactly once per claim scope."""
+        if claim_date is None:
+            claim_date = datetime.datetime.now(datetime.timezone.utc).date()
+        claim_date = claim_date.isoformat()
+        challenge_id, item_id, quantity, silver, gold, fame = reward
+        with self.lock:
+            if daily:
+                state = self.data["daily_challenges"]
+                if state["date"] != claim_date:
+                    state = {"date": claim_date, "claimed": []}
+                    self.data["daily_challenges"] = state
+                claimed = set(state["claimed"])
+            else:
+                claimed = set(self.data["claimed_challenges"])
+
+            if challenge_id in claimed:
+                return False
+
+            self.data["gold"] = max(0, self.data["gold"] + gold)
+            self.data["silver"] = max(0, self.data["silver"] + silver)
+            self.data["fame"] = max(0, self.data["fame"] + fame)
+            if item_id and quantity:
+                owned = set(self.data["owned_items"])
+                owned.add(item_id)
+                self.data["owned_items"] = sorted(owned)
+            claimed.add(challenge_id)
+            if daily:
+                self.data["daily_challenges"]["claimed"] = sorted(claimed)
+            else:
+                self.data["claimed_challenges"] = sorted(claimed)
+            self._save()
+            return True
+
+    def completed_challenges(self, daily=False, claim_date=None):
+        """Return permanent claims or today's resettable daily claims."""
+        if claim_date is None:
+            claim_date = datetime.datetime.now(datetime.timezone.utc).date()
+        claim_date = claim_date.isoformat()
+        with self.lock:
+            if not daily:
+                return list(self.data["claimed_challenges"])
+            state = self.data["daily_challenges"]
+            if state["date"] != claim_date:
+                self.data["daily_challenges"] = {
+                    "date": claim_date,
+                    "claimed": [],
+                }
+                self._save()
+                return []
+            return list(state["claimed"])
 
 
 INVENTORY_PROBE = os.environ.get(
@@ -352,10 +499,284 @@ def encode_qdatetime(value=None):
     )
 
 
+def encode_no_joined_tournament_season():
+    """Encode Tournament.GetJoinedSeason's valid "not joined" result.
+
+    The 01.06 response decoder at 0x000492F8 reads, in order: a u32 season
+    identifier, a Quazal string, two u64 date/times, three u32 fields, and a
+    list count. Quazal strings include their trailing NUL in the u16 length,
+    so an empty string is ``<u16 1, NUL>`` rather than ``<u16 0>``.
+    """
+    return (
+        struct.pack("<IH", 0, 1)
+        + b"\x00"
+        + struct.pack("<QQIIII", 0, 0, 0, 0, 0, 0)
+    )
+
+
+V106_CHALLENGE_REWARDS = {
+    # All 72 exact rows from retail 01.06 XML.dat's challenge_reward table:
+    # id, item_id, item_quantity, silver, gold, fame.
+    1: (1, 0, 0, 1000, 0, 0),
+    2: (2, 0, 0, 2000, 0, 2000),
+    3: (3, 130078, 1, 4000, 10, 4000),
+    4: (4, 0, 0, 1000, 0, 0),
+    5: (5, 0, 0, 2000, 0, 2000),
+    6: (6, 130073, 1, 4000, 10, 4000),
+    7: (7, 0, 0, 1000, 0, 0),
+    8: (8, 0, 0, 2000, 0, 2000),
+    9: (9, 130031, 1, 4000, 20, 4000),
+    10: (10, 0, 0, 1000, 0, 0),
+    11: (11, 0, 0, 2000, 0, 2000),
+    12: (12, 130011, 1, 4000, 10, 4000),
+    13: (13, 0, 0, 2500, 0, 0),
+    14: (14, 0, 0, 5000, 2, 2000),
+    15: (15, 130060, 1, 10000, 5, 4000),
+    16: (16, 0, 0, 2500, 0, 0),
+    17: (17, 0, 0, 5000, 2, 2000),
+    18: (18, 130020, 1, 10000, 5, 4000),
+    19: (19, 0, 0, 1000, 0, 0),
+    20: (20, 0, 0, 2000, 0, 2000),
+    21: (21, 0, 0, 4000, 40, 4000),
+    22: (22, 0, 0, 1000, 0, 0),
+    23: (23, 0, 0, 2000, 0, 2000),
+    24: (24, 0, 0, 4000, 40, 4000),
+    25: (25, 0, 0, 1000, 0, 0),
+    26: (26, 0, 0, 2000, 0, 2000),
+    27: (27, 0, 0, 4000, 40, 4000),
+    28: (28, 0, 0, 1000, 0, 0),
+    29: (29, 0, 0, 2000, 0, 2000),
+    30: (30, 0, 0, 4000, 40, 4000),
+    31: (31, 0, 0, 1000, 0, 0),
+    32: (32, 0, 0, 2000, 0, 2000),
+    33: (33, 0, 0, 4000, 40, 4000),
+    34: (34, 0, 0, 1000, 0, 0),
+    35: (35, 0, 0, 2000, 0, 2000),
+    36: (36, 0, 0, 4000, 40, 4000),
+    37: (37, 0, 0, 1000, 0, 0),
+    38: (38, 0, 0, 2000, 0, 2000),
+    39: (39, 0, 0, 4000, 40, 4000),
+    40: (40, 0, 0, 1000, 0, 0),
+    41: (41, 0, 0, 2000, 0, 2000),
+    42: (42, 0, 0, 4000, 40, 4000),
+    43: (43, 0, 0, 2000, 0, 0),
+    44: (44, 0, 0, 4000, 0, 1000),
+    45: (45, 130051, 1, 5000, 0, 1000),
+    46: (46, 0, 0, 0, 1, 0),
+    47: (47, 0, 0, 0, 2, 1000),
+    48: (48, 130033, 1, 0, 5, 1000),
+    49: (49, 0, 0, 0, 1, 0),
+    50: (50, 0, 0, 0, 2, 1000),
+    51: (51, 130072, 1, 0, 5, 1000),
+    52: (52, 0, 0, 2000, 0, 2000),
+    53: (53, 0, 0, 4000, 0, 4000),
+    54: (54, 0, 0, 8000, 0, 8000),
+    55: (55, 0, 0, 1000, 0, 1000),
+    56: (56, 0, 0, 2000, 0, 2000),
+    57: (57, 0, 0, 4000, 0, 4000),
+    58: (58, 60009, 1, 0, 0, 500),
+    59: (59, 0, 0, 0, 1, 1000),
+    60: (60, 60006, 1, 0, 0, 2000),
+    61: (61, 0, 0, 500, 0, 500),
+    62: (62, 0, 0, 1000, 0, 1000),
+    63: (63, 60006, 1, 0, 0, 2000),
+    64: (64, 0, 0, 1000, 0, 1000),
+    65: (65, 0, 0, 2000, 0, 2000),
+    66: (66, 60006, 1, 0, 0, 4000),
+    67: (67, 60010, 1, 0, 0, 500),
+    68: (68, 60012, 1, 0, 0, 1000),
+    69: (69, 60014, 1, 0, 0, 2000),
+    70: (70, 60007, 1, 0, 0, 1000),
+    71: (71, 60007, 1, 0, 0, 2000),
+    72: (72, 60007, 1, 0, 0, 4000),
+}
+V106_DAILY_CHALLENGE_IDS = frozenset(range(52, 73))
+
+
+def encode_v106_challenge_reward(reward):
+    """Encode a retail challenge-reward DB row in the 01.06 RPC order.
+
+    The XML source row is ``id, item_id, item_quantity, silver, gold, fame``.
+    The shared six-u32 reward DTO follows the XML reward presentation columns:
+    ``id, gold, silver, fame, item_id, item_quantity``.  A live claim made the
+    distinction observable: placing silver in DTO slot 3 increased displayed
+    fame while leaving displayed silver unchanged.
+    """
+    reward_id, item_id, item_quantity, silver, gold, fame = reward
+    return struct.pack(
+        "<6I", reward_id, gold, silver, fame, item_id, item_quantity
+    )
+
+
+def encode_v106_protocol_response(protocol, method, params=b"", now=None):
+    """Return an exact, statically proven 01.06 protocol response body.
+
+    ``None`` means that the method's complete layout or inactive semantics are
+    not yet proven and the caller must continue to the diagnostic fallback.
+    Explicit ``P<n>M<n>`` overrides remain authoritative at dispatch time.
+    """
+    if protocol == PROTO_TOURNAMENT:
+        if method == 2:
+            # Helper 0x0004893C: u32, bool, two u64 date/times, u32,
+            # then two independent list counts.
+            return struct.pack("<I?QQIII", 0, False, 0, 0, 0, 0, 0)
+        if method == 5:
+            # Helper 0x00049D68: one u32 followed by a list count.
+            return struct.pack("<II", 0, 0)
+        if method == 14:
+            # Parser 0x00047C6C calls list decoder 0x005529AC twice.
+            return struct.pack("<II", 0, 0)
+
+    if protocol == PROTO_LOGIN_REWARD:
+        if method == 1:
+            # Parser case reads one serialized bool.
+            return struct.pack("<?", False)
+        if method == 2:
+            # list<six-u32 record>, u32, u32
+            return struct.pack("<III", 0, 0, 0)
+        if method == 3:
+            # list<six-u32 record>, u32, u32, Quazal DateTime
+            return struct.pack("<IIIQ", 0, 0, 0, encode_qdatetime(now))
+        if method == 4:
+            return struct.pack("<I", 0)
+
+    if protocol == PROTO_DAILY_POPUP and method == 1:
+        # Parser 0x00026A1C: bool, then helper 0x0002710C's
+        # u32/bool/bool tuple, followed by a list count.
+        return struct.pack("<?I??I", False, 0, False, False, 0)
+
+    if protocol == PROTO_CHALLENGE:
+        if method in (1, 3):
+            # ClaimChallengeReward is player PID + challenge ID. The live
+            # ClaimDailyChallengeReward request is challenge ID + qDateTime.
+            # Both responses use the same six-u32 DTO decoded by 0x0001E018.
+            try:
+                challenge_id = struct.unpack_from(
+                    "<I", params, 4 if method == 1 else 0
+                )[0]
+            except struct.error:
+                challenge_id = 0
+            row = V106_CHALLENGE_REWARDS.get(
+                challenge_id, (0, 0, 0, 0, 0, 0)
+            )
+            return encode_v106_challenge_reward(row)
+        if method in (2, 4):
+            # List decoder 0x00546B58 reads a count then one u32 per element.
+            return struct.pack("<I", 0)
+
+    if protocol == PROTO_COMMUNITY_BOSS_FIGHT and method in (1, 5):
+        # Both cases call list decoder 0x00547D74.
+        return struct.pack("<I", 0)
+
+    return None
+
+
 def encode_purchase_result(gold, silver, item_id, transaction_time=0, quantity=1):
     """Encode method 7/13 balances and its 16-byte transaction receipt."""
     return struct.pack(
         "<IIIQI", gold, silver, item_id, transaction_time, quantity
+    )
+
+
+def decode_recruit_request(params, title_version=None):
+    """Decode Shop method 13 for the selected title version.
+
+    01.06 inserts a category u32 before the unchanged signed gold/silver cost
+    pair. Both layouts are pinned to live wire captures.
+    """
+    if title_version is None:
+        title_version = os.environ.get("SPARTACUS_TITLE_VERSION", "01.00")
+    if title_version == "01.06":
+        return struct.unpack_from("<IIIii", params, 0)
+    gladiator_id, unknown, gold_cost, silver_cost = struct.unpack_from(
+        "<IIii", params, 0
+    )
+    return gladiator_id, unknown, None, gold_cost, silver_cost
+
+
+def encode_reward_balances(gold, silver, fame):
+    """Encode Shop method 20's three absolute post-reward balances."""
+    return struct.pack("<III", gold, silver, fame)
+
+
+V106_ROSTER_TYPE_ID = 0x80000003
+V106_ROSTER_OWNED_COUNT_OFFSET = 0x53B4
+V106_ROSTER_FIRST_OWNED_OFFSET = 0x0810
+V106_ROSTER_RECORD_STRIDE = 0x0158
+V106_ROSTER_OWNED_KEY_OFFSET = 0x08
+V106_ROSTER_OWNED_ACTIVE_OFFSET = 0x13C
+# The fixed record arrays end immediately before the six-word trailer.  This
+# also gives us a format-derived upper bound instead of trusting a corrupt
+# count from disk.
+V106_ROSTER_TRAILER_OFFSET = 0x53B0
+V106_ROSTER_MAX_OWNED = (
+    (V106_ROSTER_TRAILER_OFFSET - 4
+     - (V106_ROSTER_FIRST_OWNED_OFFSET + V106_ROSTER_OWNED_KEY_OFFSET))
+    // V106_ROSTER_RECORD_STRIDE
+) + 1
+
+
+def read_v106_owned_gladiator_records(content_id=1):
+    """Read Shop ownership records from the authoritative v1.06 type-3 save.
+
+    The v1.06 format-4 converter copies each old-format owned record from
+    file +0x810 to manager +0x820.  Its owned count is the big-endian u32 at
+    +0x53B4, and the post-load validator compares record +0x08 against Shop
+    method 24's first u32.  Return no records when the file is absent or fails
+    structural bounds checks; never infer ownership from partial data.
+    """
+    try:
+        with open(user_content_path(V106_ROSTER_TYPE_ID, content_id), "rb") as f:
+            payload = f.read()
+    except OSError:
+        return ()
+
+    if len(payload) < V106_ROSTER_OWNED_COUNT_OFFSET + 4:
+        return ()
+    owned_count = struct.unpack_from(
+        ">I", payload, V106_ROSTER_OWNED_COUNT_OFFSET
+    )[0]
+    if owned_count > V106_ROSTER_MAX_OWNED:
+        return ()
+
+    records = []
+    for index in range(owned_count):
+        record_offset = (
+            V106_ROSTER_FIRST_OWNED_OFFSET
+            + index * V106_ROSTER_RECORD_STRIDE
+        )
+        key_offset = record_offset + V106_ROSTER_OWNED_KEY_OFFSET
+        active_offset = record_offset + V106_ROSTER_OWNED_ACTIVE_OFFSET
+        if key_offset + 4 > len(payload) or active_offset >= len(payload):
+            return ()
+        gladiator_id = struct.unpack_from(">I", payload, key_offset)[0]
+        if gladiator_id == 0:
+            return ()
+        # Method 24's bool is copied directly to native record +0x13C. False
+        # marks a restored gladiator as requiring revival, so this is persistent
+        # roster state rather than optional Shop metadata.
+        active = 1 if payload[active_offset] else 0
+        records.append((gladiator_id, active))
+    return tuple(records)
+
+
+def encode_shop_records(gladiator_records=()):
+    """Encode Shop method 24's structured ownership list.
+
+    The 01.06 decoder at 0x00043CD0 reads four u32 values, one serialized
+    bool, and a final u32 for every record.  The roster validator at
+    0x0025C730 matches field 1 against native owned-record +0x08 and copies
+    field 5 to native record +0x13C. The final zero selects the client's
+    explicit default appearance mapping; fields 2-4 are not consumed by the
+    roster-application path.
+    """
+    gladiator_records = tuple(gladiator_records)
+    return (
+        struct.pack("<I", len(gladiator_records))
+        + b"".join(
+            struct.pack("<IIIIBI", gladiator_id, 0, 0, 0, active, 0)
+            for gladiator_id, active in gladiator_records
+        )
     )
 
 
@@ -830,6 +1251,21 @@ def build_rmc_response(protocol: int, call_id: int, method_id: int,
     return struct.pack("<I", len(inner)) + inner
 
 
+def encode_patch_version_response() -> tuple[bytes, list[int]]:
+    """Protocol 106 method 1 body: five little-endian u32 patch versions.
+
+    Returns (body, fields) so the caller can log exactly what was sent. An
+    empty body is NOT equivalent: it starves the client's decoder and leaves
+    ActOnServerRequestState() reporting ASYNC_STATUS_NONE, which is the
+    observed 01.06 "Updating Game Data" hang.
+    """
+    fields = [
+        int(os.environ.get(f"P106M1_{i}", str(DEFAULT_PATCH_VERSIONS[i])), 0)
+        for i in range(PATCH_VERSION_FIELDS)
+    ]
+    return struct.pack(f"<{PATCH_VERSION_FIELDS}I", *fields), fields
+
+
 def build_rmc_error(protocol: int, call_id: int, error_code: int) -> bytes:
     """Build a failing RMC response.
 
@@ -1275,7 +1711,7 @@ def main(port=None, stop_event=None, ready_event=None, host="0.0.0.0"):
                     content_id = 1
                     content_path = user_content_path(type_id, content_id)
                     if os.path.isfile(content_path):
-                        format_version = USER_CONTENT_FORMAT_VERSIONS.get(type_id)
+                        format_version = user_content_format_version(type_id)
                         resp_body = encode_user_content_rows(
                             type_id, content_id, USER_PID, format_version
                         )
@@ -1450,15 +1886,19 @@ def main(port=None, stop_event=None, ready_event=None, host="0.0.0.0"):
                         # Live-traced (2026-08-11): the Recruit-store purchase
                         # sends 102/m13 and blocks until answered - the infinite
                         # spinner. Params mirror method 7 (purchase) but for a
-                        # gladiator; the user confirmed p3 is the silver cost and
-                        # that gladiators cost gold OR silver (the unused currency
-                        # is -1):
-                        #   u32 gladiator_id, u32 unk, i32 gold_cost, i32 silver_cost
+                        # gladiator; live captures confirm that the last two
+                        # fields are gold/silver costs and use -1 for the unused
+                        # currency:
+                        # 01.00: id, zero, gold cost, silver cost.
+                        # 01.06: id, zero, category, gold cost, silver cost.
                         try:
-                            gladiator_id, unk, gold_cost, silver_cost = \
-                                struct.unpack_from("<IIii", rmc["params"], 0)
+                            gladiator_id, unk, category, gold_cost, \
+                                silver_cost = decode_recruit_request(
+                                    rmc["params"]
+                                )
                         except struct.error:
-                            gladiator_id, unk, gold_cost, silver_cost = 0, 0, -1, -1
+                            gladiator_id, unk, category = 0, 0, None
+                            gold_cost = silver_cost = -1
                         # Debit via add_income (negative delta) so the gladiator
                         # id does NOT pollute the item inventory (owned_items),
                         # unlike purchase(); -1 costs are skipped.
@@ -1484,6 +1924,7 @@ def main(port=None, stop_event=None, ready_event=None, host="0.0.0.0"):
                             )
                         label = "MONETIZATION_RECRUIT"
                         log(f"   *** Recruit gladiator={gladiator_id} unk={unk} "
+                            f"category={category} "
                             f"gold_cost={gold_cost} silver_cost={silver_cost} "
                             f"shape={shape} -> balances gold={gold} silver={silver} ***")
                     elif rmc["method_id"] == 15:    # Replace gladiator perk
@@ -1512,6 +1953,55 @@ def main(port=None, stop_event=None, ready_event=None, host="0.0.0.0"):
                         log(f"   *** Perk swap gladiator={gladiator_id} "
                             f"perk={perk_id} gold_cost={gold_cost} "
                             f"debited={debit} -> gold={gold} ***")
+                    elif rmc["method_id"] == 19:    # Get reward balances (01.06)
+                        # Methods 19 and 20 share parser case 0x000435A4 in
+                        # 01.06. It decodes exactly three u32 output slots.
+                        # Returning the old generic receipt made its third
+                        # word an item id of zero, overwriting fame at login.
+                        with ECONOMY.lock:
+                            gold = ECONOMY.data["gold"]
+                            silver = ECONOMY.data["silver"]
+                            fame = ECONOMY.data["fame"]
+                        resp_body = encode_reward_balances(gold, silver, fame)
+                        label = "MONETIZATION_REWARD_BALANCES"
+                        log(f"   *** Reward balances gold={gold} "
+                            f"silver={silver} fame={fame} ***")
+                    elif rmc["method_id"] == 20:    # Deposit fight rewards (01.06)
+                        # Recovered from the 01.06 client on 2026-08-26:
+                        # request stub 0x0003F0E0 serializes three i32 values;
+                        # parser vtable entry 23 at 0x000434E4 decodes exactly
+                        # three u32 outputs. The fight caller at 0x001D3EF0
+                        # supplies gold, silver and fame reward deltas in that
+                        # order. The response contains their absolute balances.
+                        try:
+                            gold_delta, silver_delta, fame_delta = \
+                                struct.unpack_from("<iii", rmc["params"], 0)
+                        except struct.error:
+                            gold_delta = silver_delta = fame_delta = 0
+                        gold, silver, fame = ECONOMY.add_rewards(
+                            gold_delta, silver_delta, fame_delta
+                        )
+                        resp_body = encode_reward_balances(gold, silver, fame)
+                        label = "MONETIZATION_FIGHT_REWARDS"
+                        log(f"   *** Fight rewards gold={gold_delta:+d} "
+                            f"silver={silver_delta:+d} fame={fame_delta:+d} "
+                            f"-> balances gold={gold} silver={silver} "
+                            f"fame={fame} ***")
+                    elif rmc["method_id"] == 24:    # Enumerate Shop records (01.06)
+                        # Parser case 0x00043918 calls the structured-list
+                        # decoder at 0x0054F638.  The post-load roster validator
+                        # removes every native owned record whose +0x08 key is
+                        # absent from this result, so mirror the keys from the
+                        # authoritative type-3 save instead of returning an
+                        # empty list.
+                        content_id = int(os.environ.get(
+                            "SPARTACUS_USER_CONTENT_ID", "1"
+                        ), 0)
+                        shop_records = read_v106_owned_gladiator_records(content_id)
+                        resp_body = encode_shop_records(shop_records)
+                        label = "MONETIZATION_SHOP_RECORDS"
+                        log("   *** Shop records -> owned gladiators "
+                            f"{list(shop_records)} ***")
                     else:
                         # UNHANDLED shop method.  Protocol 102 is the one
                         # protocol excluded from the GENERIC_ACK fallback below,
@@ -1588,6 +2078,113 @@ def main(port=None, stop_event=None, ready_event=None, host="0.0.0.0"):
                         log(f"   *** replying [{shape}] to avoid a client hang; "
                             f"no currency debited (balances gold={gold} "
                             f"silver={silver}). Please report this method. ***")
+
+                elif rmc and rmc["is_request"] \
+                        and rmc["protocol"] == PROTO_TOURNAMENT \
+                        and rmc["method_id"] == 7 \
+                        and (PROTO_TOURNAMENT, 7) not in PROTO_OVERRIDES:
+                    resp_body = encode_no_joined_tournament_season()
+                    label = "TOURNAMENT_GET_JOINED_SEASON_NONE"
+                    log("   *** Tournament method 7 GetJoinedSeason -> "
+                        f"not joined ({len(resp_body)}B structured result) ***")
+
+                elif rmc and rmc["is_request"] \
+                        and rmc["protocol"] == PROTO_PATCH_VERSION \
+                        and (PROTO_PATCH_VERSION,
+                             rmc["method_id"]) not in PROTO_OVERRIDES:
+                    # An explicit P106M<n>=<shape> override still wins, so a
+                    # live test can force a different shape entirely without
+                    # editing this branch.
+                    method = rmc["method_id"]
+                    if method == 1:
+                        resp_body, fields = encode_patch_version_response()
+                        label = "PATCHVERSION_GET_CURRENT"
+                        log(f"   *** PatchVersion method 1 -> "
+                            f"{fields} ({len(resp_body)}B); compared fields "
+                            f"are {fields[:3]} ***")
+                    else:
+                        # The client only implements methods 1 and 2, and
+                        # treats 2 as a no-op. Anything else raises 0x80010002
+                        # client-side, so an empty body is the safe answer.
+                        resp_body = b""
+                        label = f"PATCHVERSION_EMPTY(m{method})"
+                        log(f"   *** PatchVersion method={method} answered "
+                            f"empty (client implements only 1 and 2) ***")
+
+                elif rmc and rmc["is_request"] \
+                        and rmc["protocol"] == PROTO_CHALLENGE \
+                        and rmc["method_id"] in (1, 2, 3, 4) \
+                        and (PROTO_CHALLENGE, rmc["method_id"]) \
+                        not in PROTO_OVERRIDES:
+                    method = rmc["method_id"]
+                    if method in (1, 3):
+                        try:
+                            challenge_id = struct.unpack_from(
+                                "<I", rmc["params"],
+                                4 if method == 1 else 0
+                            )[0]
+                        except struct.error:
+                            challenge_id = 0
+                        reward = V106_CHALLENGE_REWARDS.get(challenge_id)
+                        daily = method == 3
+                        correct_claim_path = (
+                            challenge_id in V106_DAILY_CHALLENGE_IDS
+                        ) == daily
+                        credited = bool(reward) and correct_claim_path and \
+                            ECONOMY.claim_challenge_reward(
+                                reward, daily=daily
+                            )
+                        response_reward = (
+                            reward if credited else (0, 0, 0, 0, 0, 0)
+                        )
+                        resp_body = encode_v106_challenge_reward(
+                            response_reward
+                        )
+                        response_fields = struct.unpack("<6I", resp_body)
+                        label = (
+                            "CHALLENGE_CLAIM_DAILY_REWARD" if daily else
+                            "CHALLENGE_CLAIM_REWARD"
+                        )
+                        log(f"   *** Challenge claim={challenge_id} "
+                            f"daily={daily} reward={reward or 'unknown'} "
+                            f"credited={credited} "
+                            f"-> rpc_fields={response_fields} ***")
+                    else:
+                        daily = method == 4
+                        completed = ECONOMY.completed_challenges(daily=daily)
+                        resp_body = struct.pack(
+                            f"<I{len(completed)}I", len(completed), *completed
+                        )
+                        label = (
+                            "CHALLENGE_GET_COMPLETED_DAILY" if daily else
+                            "CHALLENGE_GET_COMPLETED"
+                        )
+                        log(f"   *** Challenge method {method} -> completed "
+                            f"{completed} ***")
+
+                elif rmc and rmc["is_request"] \
+                        and (rmc["protocol"], rmc["method_id"]) \
+                        not in PROTO_OVERRIDES \
+                        and (static_body := encode_v106_protocol_response(
+                            rmc["protocol"], rmc["method_id"], rmc["params"]
+                        )) is not None:
+                    resp_body = static_body
+                    label = (f"V106_STATIC(p{rmc['protocol']}"
+                             f"m{rmc['method_id']})")
+                    if (rmc["protocol"] == PROTO_CHALLENGE \
+                            and rmc["method_id"] == 1):
+                        challenge_id = (
+                            struct.unpack_from("<I", rmc["params"], 4)[0]
+                            if len(rmc["params"]) >= 8 else 0
+                        )
+                        reward = V106_CHALLENGE_REWARDS.get(challenge_id)
+                        log(f"   *** Challenge method 1 claim={challenge_id} "
+                            f"-> retail reward row {reward or 'unknown/zero'} "
+                            f"({len(resp_body)}B; economy not credited yet) ***")
+                    else:
+                        log(f"   *** {PROTO_NAMES.get(rmc['protocol'], 'v1.06')} "
+                            f"method {rmc['method_id']} -> statically proven "
+                            f"inactive result ({len(resp_body)}B) ***")
 
                 elif rmc and rmc["is_request"] and GENERIC_ACK:
                     # Probe for protocols we haven't reversed yet. Every

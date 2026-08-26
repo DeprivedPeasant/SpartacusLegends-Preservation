@@ -15,6 +15,11 @@ import time
 import traceback
 
 from _version import __version__ as VERSION
+from server_config import (
+    DEFAULT_TITLE_VERSION,
+    config_path as server_config_path,
+    read_title_version,
+)
 
 
 DEFAULT_HTTP_PORT = 80
@@ -45,7 +50,8 @@ def running_from_temp(base_dir: Path) -> bool:
 
 
 def configure_environment(log_dir: Path, secure_port: int,
-                          advertise_host: str = "127.0.0.1") -> None:
+                          advertise_host: str = "127.0.0.1",
+                          title_version: str = "01.00") -> None:
     """Set the exact response matrix validated by the preservation tests.
 
     advertise_host reaches the Quazal server through RDV_HOST, which it reads at
@@ -54,6 +60,13 @@ def configure_environment(log_dir: Path, secure_port: int,
     online-config response hands out, or the client is sent somewhere it cannot
     reach and login stalls until it times out.
     """
+    base_dir = application_dir()
+    data_dir = base_dir / "data"
+    user_content_dir = data_dir / "usercontent"
+    economy_profile = data_dir / "profile.json"
+    if title_version != DEFAULT_TITLE_VERSION:
+        user_content_dir /= title_version
+        economy_profile = data_dir / f"profile-{title_version}.json"
     defaults = {
         "RDV_HOST": advertise_host,
         "RDV_ADVERTISE_PORT": str(secure_port),
@@ -64,16 +77,18 @@ def configure_environment(log_dir: Path, secure_port: int,
         "P31M13": "zero",
         "P29M12": "echo_list",
         "PUSH_NOTIFICATION": "0",
-        "SPARTACUS_PROFILE": str(application_dir() / "data" / "profile.json"),
+        "SPARTACUS_PROFILE": str(economy_profile),
         "SPARTACUS_PRUDP_LOG": str(log_dir / "prudp.log"),
         "SPARTACUS_CONFIG_LOG": str(log_dir / "online_config.log"),
         # PyInstaller extracts imported modules beneath a temporary _MEIPASS
         # directory. Never let the HTTP upload handler derive persistence from
         # __file__; native user-content must live beside the release executable.
-        "SPARTACUS_USER_CONTENT_DIR": str(
-            application_dir() / "data" / "usercontent"
-        ),
+        "SPARTACUS_USER_CONTENT_DIR": str(user_content_dir),
         "SPARTACUS_USER_CONTENT_HOST": advertise_host,
+        # UserContent property 100 selects different native apply routines in
+        # 01.00 and 01.06. prudp_server uses this to replay the exact metadata
+        # emitted by the matching title's writer.
+        "SPARTACUS_TITLE_VERSION": title_version,
         "SPARTACUS_ROSTER_PROFILE": str(application_dir() / "data" / "roster.json"),
         "SPARTACUS_CAMPAIGN_PROFILE": str(application_dir() / "data" / "campaign.json"),
         "SPARTACUS_ROSTER_LOG": str(log_dir / "roster_bridge.log"),
@@ -153,6 +168,12 @@ def parse_args(argv=None):
     # now a no-op unless combined with --legacy-roster-bridge.
     parser.add_argument("--no-roster-bridge", action="store_true",
                         help=argparse.SUPPRESS)
+    parser.add_argument("--title-version", default=None,
+                        choices=["01.00", "01.06"],
+                        help="Spartacus Legends build being served. Selects "
+                             "the native save-object size table and the "
+                             "matching required client patch. Defaults to "
+                             "the version recorded by the patch installer")
     parser.add_argument("--check", action="store_true",
                         help="check ports and configuration, then exit")
     parser.add_argument("--recover-legends", type=Path, metavar="RPCS3_FOLDER",
@@ -174,6 +195,17 @@ def maybe_pause(no_wait: bool) -> None:
             pass
 
 
+def resolve_title_version(cli_value: str | None,
+                          base_dir: Path) -> tuple[str, str]:
+    """Resolve the served build while preserving an explicit recovery override."""
+    if cli_value is not None:
+        return cli_value, "command-line override"
+    configured = read_title_version(server_config_path(base_dir))
+    if configured is not None:
+        return configured, "patch-installer configuration"
+    return DEFAULT_TITLE_VERSION, "01.00 backward-compatible default"
+
+
 MIGRATION_TYPE_NAMES = {
     0x80000001: "profile",
     0x80000002: "campaign",
@@ -190,14 +222,16 @@ class MigrationController:
     never reach start(), so they never open a PINE connection.
     """
 
-    def __init__(self, base_dir: Path, announce=None):
+    def __init__(self, base_dir: Path, announce=None, title_version=None):
         import migration_coordinator
         self.mc = migration_coordinator
         self.base_dir = Path(base_dir)
         self.data_dir = self.base_dir / "data"
         self.announce = announce or print
+        self.title_version = migration_coordinator.coerce_title_version(
+            title_version)
         self.report = migration_coordinator.evaluate_installation(
-            self.data_dir)
+            self.data_dir, self.title_version)
         self.gate = None
         self.pending_types = []
         self.stop_bridge = threading.Event()
@@ -205,11 +239,13 @@ class MigrationController:
         self.completed = threading.Event()
 
     def _native_valid(self, type_id):
-        info = self.mc.NATIVE_OBJECTS[type_id]
-        path = (self.data_dir / "usercontent" / f"{type_id:08x}" /
+        info = self.mc.native_objects(self.title_version)[type_id]
+        path = (self.mc.native_content_dir(
+                    self.data_dir, self.title_version) /
+                f"{type_id:08x}" /
                 f"{self.mc.NATIVE_CONTENT_ID}.bin")
         try:
-            return path.is_file() and path.stat().st_size == info.expected_size
+            return path.is_file() and info.accepts(path.stat().st_size)
         except OSError:
             return False
 
@@ -218,7 +254,9 @@ class MigrationController:
         assessment.state = state
         if state in (self.mc.ObjectState.CAPTURED,
                      self.mc.ObjectState.COMPLETE):
-            path = (self.data_dir / "usercontent" / f"{type_id:08x}" /
+            path = (self.mc.native_content_dir(
+                        self.data_dir, self.title_version) /
+                    f"{type_id:08x}" /
                     f"{self.mc.NATIVE_CONTENT_ID}.bin")
             if path.is_file():
                 assessment.native_path = path
@@ -364,6 +402,13 @@ def main() -> int:
         sys.stdout.reconfigure(line_buffering=True)
     args = parse_args()
     base_dir = application_dir()
+    try:
+        args.title_version, version_source = resolve_title_version(
+            args.title_version, base_dir)
+    except ValueError as error:
+        print(f"STARTUP ERROR: {error}", file=sys.stderr)
+        maybe_pause(args.no_wait)
+        return 2
     if args.apply_recovery and args.recover_legends is None:
         print("STARTUP ERROR: --apply-recovery requires --recover-legends",
               file=sys.stderr)
@@ -388,7 +433,9 @@ def main() -> int:
     # default loopback setup. Both the online-config response and the Quazal
     # auth->secure redirect must carry it.
     advertise_host = args.advertise_host or "127.0.0.1"
-    configure_environment(log_dir, args.secure_port, advertise_host)
+    configure_environment(
+        log_dir, args.secure_port, advertise_host, args.title_version
+    )
 
     # The remote-config metadata row carries the expected digest of the exact
     # body served by the HTTP component. Derive it from the same response
@@ -401,6 +448,7 @@ def main() -> int:
     )
 
     print(f"Spartacus Legends Preservation Server v{VERSION}")
+    print(f"Game version: {args.title_version} ({version_source})")
     print(f"Logs: {log_dir}")
     if running_from_temp(base_dir):
         print("\nWARNING: this server is running from a temporary folder:")
@@ -445,7 +493,8 @@ def main() -> int:
     # explicit --legacy-roster-bridge recovery/debug mode stays separate.
     migration = None
     if not legacy_roster_bridge:
-        migration = MigrationController(base_dir)
+        migration = MigrationController(base_dir,
+                                        title_version=args.title_version)
         migration.start(args.pine_port, log_dir)
 
     onlineconfig_args = (args.host, args.http_port, advertise_host,
@@ -504,7 +553,8 @@ def main() -> int:
     print("\nAll services are ready.")
     print(f"RPCS3 IP swap: onlineconfigservice.ubi.com={advertise_host}")
     print("Enable patch: Spartacus Legends - Server emulator compatibility")
-    print(f"Native save persistence: {base_dir / 'data' / 'usercontent'}")
+    print("Native save persistence: "
+          f"{Path(os.environ['SPARTACUS_USER_CONTENT_DIR'])}")
     if legacy_roster_bridge:
         print(f"Legacy roster bridge: RPCS3 IPC port {args.pine_port}")
     print("Start the game, log in, and leave this window open.")

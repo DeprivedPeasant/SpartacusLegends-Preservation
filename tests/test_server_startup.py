@@ -12,8 +12,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 from tools.spartacus_server import (
     configure_environment,
     parse_args,
+    resolve_title_version,
     running_from_temp,
 )
+from tools.server_config import encode_title_version
 
 
 class TempFolderGuardTests(unittest.TestCase):
@@ -57,6 +59,59 @@ class AdvertisedHostTests(unittest.TestCase):
                     Path(os.environ["SPARTACUS_USER_CONTENT_DIR"]),
                     release_dir / "data" / "usercontent",
                 )
+
+    def test_title_version_is_forwarded_to_user_content_metadata(self):
+        with tempfile.TemporaryDirectory() as temp:
+            release_dir = Path(temp) / "release"
+            with unittest.mock.patch.dict(os.environ, {}, clear=True), \
+                    unittest.mock.patch(
+                        "tools.spartacus_server.application_dir",
+                        return_value=release_dir,
+                    ):
+                configure_environment(release_dir / "logs", 21001,
+                                      "127.0.0.1", "01.06")
+                self.assertEqual(os.environ["SPARTACUS_TITLE_VERSION"],
+                                 "01.06")
+                self.assertEqual(
+                    Path(os.environ["SPARTACUS_USER_CONTENT_DIR"]),
+                    release_dir / "data" / "usercontent" / "01.06")
+                self.assertEqual(
+                    Path(os.environ["SPARTACUS_PROFILE"]),
+                    release_dir / "data" / "profile-01.06.json")
+
+
+class TitleSelectionTests(unittest.TestCase):
+    def test_installer_configuration_selects_v106(self):
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            config = base / "data" / "server-config.json"
+            config.parent.mkdir()
+            config.write_text(encode_title_version("01.06"), encoding="utf-8")
+            self.assertEqual(resolve_title_version(None, base),
+                             ("01.06", "patch-installer configuration"))
+
+    def test_command_line_override_wins_even_if_config_is_invalid(self):
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            config = base / "data" / "server-config.json"
+            config.parent.mkdir()
+            config.write_text("not json", encoding="utf-8")
+            self.assertEqual(resolve_title_version("01.00", base),
+                             ("01.00", "command-line override"))
+
+    def test_missing_configuration_keeps_v100_compatibility(self):
+        with tempfile.TemporaryDirectory() as temp:
+            self.assertEqual(resolve_title_version(None, Path(temp)),
+                             ("01.00", "01.00 backward-compatible default"))
+
+    def test_invalid_configuration_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            config = base / "data" / "server-config.json"
+            config.parent.mkdir()
+            config.write_text("{}", encoding="utf-8")
+            with self.assertRaises(ValueError):
+                resolve_title_version(None, base)
 
 
 class PersistenceModeTests(unittest.TestCase):

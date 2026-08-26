@@ -57,18 +57,100 @@ class ObjectState(str, Enum):
     BLOCKED = "blocked"
 
 
+class TitleVersion(str, Enum):
+    """Supported Spartacus Legends builds (PARAM.SFO APP_VER)."""
+
+    V100 = "01.00"
+    V106 = "01.06"
+
+
+DEFAULT_TITLE_VERSION = TitleVersion.V100
+
+# PPU hashes RPCS3 reports for each supported build. Used for documentation
+# and for matching the distributed patch YAML; the server never computes them.
+PPU_HASHES = {
+    TitleVersion.V100: "81471d050c14f4d20b4027686f8b571dafd32394",
+    TitleVersion.V106: "131aece6ae8526d13307be925f48c87f73c43799",
+}
+
+
 @dataclass(frozen=True)
 class NativeObjectInfo:
+    """One native UserStorage object type for one title version.
+
+    ``expected_size`` is the size that build's writer produces and the size
+    the marker records. ``accepted_sizes`` is every size that build's
+    size-validation dispatcher admits, which for 01.06 includes the older
+    01.00 layouts it reads forward.
+    """
+
     type_id: int
     expected_size: int
+    accepted_sizes: tuple[int, ...]
+
+    def accepts(self, size: int) -> bool:
+        return size in self.accepted_sizes
 
 
-# Exact sizes validated by the v0.4.0 release regression.
-NATIVE_OBJECTS = {
-    0x80000001: NativeObjectInfo(0x80000001, 0x1238),
-    0x80000002: NativeObjectInfo(0x80000002, 0x1804),
-    0x80000003: NativeObjectInfo(0x80000003, 0x53C4),
+def _objects(profile, campaign, roster) -> dict:
+    rows = ((0x80000001, profile), (0x80000002, campaign),
+            (0x80000003, roster))
+    return {type_id: NativeObjectInfo(type_id, sizes[0], tuple(sizes))
+            for type_id, sizes in rows}
+
+
+# 01.00 sizes were validated by the v0.4.0 release regression. The 01.06
+# sizes come from that build's size-validation dispatcher
+# (0x00155000-0x00157400); see notes/13-v106-port.md.
+NATIVE_OBJECTS_BY_VERSION = {
+    TitleVersion.V100: _objects((0x1238,), (0x1804,), (0x53C4,)),
+    TitleVersion.V106: _objects((0x15B8, 0x1590, 0x1238),
+                                (0x1C04,),
+                                (0x53C8, 0x53C4)),
 }
+
+# Backwards-compatible default view for callers that predate multi-version
+# support. Prefer native_objects(title_version).
+NATIVE_OBJECTS = NATIVE_OBJECTS_BY_VERSION[DEFAULT_TITLE_VERSION]
+
+
+def coerce_title_version(value) -> TitleVersion:
+    """Accept a TitleVersion, "01.06", or "1.06" and return the enum."""
+    if isinstance(value, TitleVersion):
+        return value
+    if value is None:
+        return DEFAULT_TITLE_VERSION
+    text = str(value).strip()
+    for candidate in TitleVersion:
+        if text == candidate.value or text == candidate.value.lstrip("0"):
+            return candidate
+    raise ValueError(f"unsupported title version {value!r}; "
+                     f"supported: {[v.value for v in TitleVersion]}")
+
+
+def native_objects(title_version=DEFAULT_TITLE_VERSION) -> dict:
+    """Native object table for one supported build."""
+    return NATIVE_OBJECTS_BY_VERSION[coerce_title_version(title_version)]
+
+
+def native_content_dir(data_dir: Path,
+                       title_version=DEFAULT_TITLE_VERSION) -> Path:
+    """Authoritative UserStorage root for one build.
+
+    The shipped 01.00 location remains unchanged for backward compatibility.
+    Newer incompatible layouts live beneath a version namespace, so changing
+    the installed title can never replace another build's campaign object.
+    """
+    version = coerce_title_version(title_version)
+    root = Path(data_dir) / "usercontent"
+    return root if version is TitleVersion.V100 else root / version.value
+
+
+def _size_text(info: NativeObjectInfo) -> str:
+    if len(info.accepted_sizes) == 1:
+        return f"{info.expected_size} bytes"
+    return ("one of " + ", ".join(str(s) for s in info.accepted_sizes)
+            + " bytes")
 
 
 def native_sha256(path: Path) -> str:
@@ -99,6 +181,7 @@ class InstallationReport:
     assessments: dict[int, TypeAssessment] = field(default_factory=dict)
     marker: dict | None = None
     backup_path: Path | None = None
+    title_version: "TitleVersion" = DEFAULT_TITLE_VERSION
 
     @property
     def migration_needed(self) -> bool:
@@ -147,11 +230,17 @@ class UploadGate:
     """
 
     def __init__(self, expected_sizes: dict[int, int] | None = None,
-                 states: dict[int, ObjectState] | None = None):
+                 states: dict[int, ObjectState] | None = None,
+                 title_version=DEFAULT_TITLE_VERSION):
         self._lock = threading.Lock()
-        self._expected = dict(expected_sizes or
-                              {t: i.expected_size
-                               for t, i in NATIVE_OBJECTS.items()})
+        self.title_version = coerce_title_version(title_version)
+        objects = native_objects(self.title_version)
+        if expected_sizes is None:
+            self._accepted = {t: i.accepted_sizes for t, i in objects.items()}
+        else:
+            # An explicit override stays exact-size, as before.
+            self._accepted = {t: (size,)
+                              for t, size in expected_sizes.items()}
         self._states = dict(states or {})
 
     def set_state(self, type_id: int, state: ObjectState) -> None:
@@ -166,16 +255,18 @@ class UploadGate:
         """Decide one upload. Called before the body is stored."""
         with self._lock:
             state = self._states.get(type_id, ObjectState.NOT_NEEDED)
-            expected = self._expected.get(type_id)
-        if expected is None:
+            accepted = self._accepted.get(type_id)
+        if accepted is None:
             return UploadDecision(
                 False, False, state.value,
                 f"unknown native type 0x{type_id:08X}")
-        if length != expected:
+        if length not in accepted:
+            wanted = (f"exactly {accepted[0]}" if len(accepted) == 1
+                      else "one of " + ", ".join(str(s) for s in accepted))
             return UploadDecision(
                 False, False, state.value,
                 f"invalid length {length} for type 0x{type_id:08X}; "
-                f"expected exactly {expected}")
+                f"expected {wanted}")
         if state is ObjectState.BLOCKED:
             return UploadDecision(
                 False, False, state.value,
@@ -202,7 +293,7 @@ class UploadGate:
         """Build the gate for a migration run: pending types start deferred."""
         states = {type_id: a.state
                   for type_id, a in report.assessments.items()}
-        return cls(states=states)
+        return cls(states=states, title_version=report.title_version)
 
 
 def marker_path(data_dir: Path) -> Path:
@@ -247,15 +338,20 @@ def _valid_legacy_json(data_dir: Path, file_name: str,
             and required_key in data)
 
 
-def evaluate_installation(data_dir: Path) -> InstallationReport:
+def evaluate_installation(data_dir: Path,
+                          title_version=DEFAULT_TITLE_VERSION
+                          ) -> InstallationReport:
     """Read-only detection of legacy/native state for all three types."""
     data_dir = Path(data_dir)
-    report = InstallationReport(marker=read_marker(data_dir))
+    title_version = coerce_title_version(title_version)
+    objects = native_objects(title_version)
+    report = InstallationReport(marker=read_marker(data_dir),
+                                title_version=title_version)
 
     # A completed marker means migration already finished; never re-run it.
     if report.marker is not None \
             and report.marker.get("status") == "complete":
-        for info in NATIVE_OBJECTS.values():
+        for info in objects.values():
             report.assessments[info.type_id] = TypeAssessment(
                 info.type_id, ObjectState.NOT_NEEDED,
                 detail="migration marker reports complete")
@@ -272,12 +368,13 @@ def evaluate_installation(data_dir: Path) -> InstallationReport:
                 marker_backup = candidate
     report.backup_path = marker_backup
 
-    for type_id, info in NATIVE_OBJECTS.items():
-        native_path = (data_dir / "usercontent" / f"{type_id:08x}" /
+    for type_id, info in objects.items():
+        native_path = (native_content_dir(data_dir, title_version) /
+                       f"{type_id:08x}" /
                        f"{NATIVE_CONTENT_ID}.bin")
         if native_path.is_file():
             size = native_path.stat().st_size
-            if size == info.expected_size:
+            if info.accepts(size):
                 report.assessments[type_id] = TypeAssessment(
                     type_id, ObjectState.NOT_NEEDED,
                     native_path=native_path, native_size=size,
@@ -288,8 +385,17 @@ def evaluate_installation(data_dir: Path) -> InstallationReport:
                     type_id, ObjectState.BLOCKED,
                     native_path=native_path, native_size=size,
                     detail=f"malformed native object: expected "
-                           f"{info.expected_size} bytes, found {size}; "
+                           f"{_size_text(info)}, found {size}; "
                            f"recovery condition, not treated as absent")
+            continue
+
+        # Legacy JSON/PINE captures were produced by 01.00 and its restore
+        # bridge verifies that exact build. Never reinterpret them as 01.06
+        # native state; a new 01.06 namespace starts clean instead.
+        if title_version is not TitleVersion.V100:
+            report.assessments[type_id] = TypeAssessment(
+                type_id, ObjectState.NOT_NEEDED,
+                detail="legacy JSON migration applies only to title 01.00")
             continue
 
         legacy = LEGACY_FILES.get(type_id)
@@ -353,14 +459,17 @@ def build_marker(data_dir: Path, report: InstallationReport,
                  backup_path: Path, status: str) -> dict:
     """Assemble the auditable completion/progress marker contents."""
     data_dir = Path(data_dir)
+    table = native_objects(report.title_version)
     objects = {}
     for type_id in sorted(report.assessments):
         assessment = report.assessments[type_id]
-        native = NATIVE_OBJECTS[type_id]
+        native = table[type_id]
         entry = {
             "state": assessment.state.value,
             "expected_size": native.expected_size,
         }
+        if len(native.accepted_sizes) > 1:
+            entry["accepted_sizes"] = list(native.accepted_sizes)
         if assessment.legacy_source is not None:
             entry["legacy_source"] = str(
                 assessment.legacy_source.relative_to(data_dir.parent)
@@ -373,6 +482,7 @@ def build_marker(data_dir: Path, report: InstallationReport,
         objects[f"0x{type_id:08X}"] = entry
     return {
         "status": status,
+        "title_version": report.title_version.value,
         "backup_path": str(backup_path),
         "objects": objects,
         "updated_at": _datetime.datetime.now().isoformat(

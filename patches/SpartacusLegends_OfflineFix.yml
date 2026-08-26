@@ -69,3 +69,78 @@ PPU-81471d050c14f4d20b4027686f8b571dafd32394:
     Patch Version: "1.0"
     Patch:
       - [ be32, 0x000F4F80, 0x480000C4 ] # startup playlist -> finished branch
+
+PPU-131aece6ae8526d13307be925f48c87f73c43799:
+
+  "Spartacus Legends - Server emulator compatibility":
+    Games:
+      "Spartacus Legends":
+        NPUB30746: [ 01.06 ]
+    Author: "Spartacus Legends preservation project"
+    Notes: >
+      REQUIRED for the 01.06 update. Same purpose as the 01.00 entry: works
+      around RPCS3's unavailable Commerce2 middleware-ready callback and
+      incomplete product-info result so the original backend state machine
+      reaches state 26 and emits the readiness edge that
+      starts native server-save enumeration, then restores the complete locally
+      serialized profile when the retired retail profile service is
+      unavailable, and finalizes the server-backed recruitment-pool refresh
+      callback. It also suppresses a 01.06-only "Updating Game Data" modal
+      whose no-file continuation never dismisses it. 01.06 inverted the
+      profile-fallback branch, so that
+      instruction is a nop here rather than a branch. Addresses derived by
+      static comparison of the 01.00 and 01.06 executables; see
+      notes/13-v106-port.md.
+    Patch Version: "4.4"
+    Patch:
+      - [ be32, 0x0057BE8C, 0x60000000 ] # continue when the Commerce2 middleware callback is unavailable
+      - [ be32, 0x0057BF24, 0x60000000 ] # do not show the orphaned Updating Game Data modal
+      - [ be32, 0x0057BAF8, 0x4800034C ] # enter the game's state-26 success path
+      - [ be32, 0x00156DB4, 0x38000001 ] # supply Commerce readiness to the native save enumerator
+      - [ be32, 0x000B7908, 0x60000000 ] # apply the locally saved profile
+      - [ be32, 0x001DBD34, 0x98090022 ] # accept recruit-pool refresh completion
+
+  "Spartacus Legends - Online matchmaking compatibility (experimental)":
+    Games:
+      "Spartacus Legends":
+        NPUB30746: [ 01.06 ]
+    Author: "Spartacus Legends preservation project"
+    Notes: >
+      OPTIONAL EXPERIMENTAL PATCH for the 01.06 update. Same instructions as
+      the 01.00 entry at the 01.06 addresses. Not yet exercised on 01.06.
+      Leave disabled if you do not want to test online matchmaking. Clear the
+      game's PPU cache and cold-boot after changing this patch.
+    Patch Version: "0.3-test"
+    Patch:
+      - [ be32, 0x00225BB0, 0x60000000 ] # host retry: do not tear down online layer
+      - [ be32, 0x00225A14, 0x60000000 ] # search retry: do not tear down online layer
+      - [ be32, 0x002333A8, 0x38A00001 ] # direct-peer type-11 send via vport 1
+      - [ be32, 0x00233428, 0x38A00001 ] # broadcast type-11 send via vport 1
+
+  "Spartacus Legends - One-hit fight debug cheat (optional)":
+    Games:
+      "Spartacus Legends":
+        NPUB30746: [ 01.06 ]
+    Author: "Spartacus Legends preservation project"
+    Notes: >
+      OPTIONAL DEBUG CHEAT for the 01.06 update. Leave disabled for normal
+      play. Makes the player invulnerable and defeats an offline opponent with
+      the first damaging hit. Intended only to shorten repeated progression
+      and autosave tests.
+    Patch Version: "1.0-debug"
+    Patch:
+      - [ be32, 0x000A3694, 0x38000001 ] # fighter slot 0 invulnerable
+      - [ be32, 0x000A36D0, 0x38000001 ] # one-hit damage against slot 1
+
+  "Spartacus Legends - Skip startup logo screens (optional)":
+    Games:
+      "Spartacus Legends":
+        NPUB30746: [ 01.06 ]
+    Author: "Spartacus Legends preservation project"
+    Notes: >
+      OPTIONAL. Skips the publisher/developer Bink-video playlist by taking
+      the original playlist-complete transition. The title, login, profile,
+      and roster initialization paths remain unchanged.
+    Patch Version: "1.0"
+    Patch:
+      - [ be32, 0x00145298, 0x480000C4 ] # startup playlist -> finished branch

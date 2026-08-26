@@ -31,6 +31,7 @@ tools/*
 !tools/legend_recovery.py
 !tools/migration_coordinator.py
 !tools/patch_installer.py
+!tools/server_config.py
 !tools/UbiOnlineConfigService/
 tools/UbiOnlineConfigService/*
 !tools/UbiOnlineConfigService/__init__.py
@@ -49,6 +50,7 @@ tests/*
 !tests/test_migration_upload_gate.py
 !tests/test_migration_launcher.py
 !tests/test_server_startup.py
+!tests/test_title_versions.py
 
 **/__pycache__/
 *.py[cod]
