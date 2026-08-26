@@ -1,4 +1,4 @@
-# Current AI handoff — v0.6.0 release candidate
+# Current AI handoff — v0.6.0 released checkpoint
 
 - **Checkpoint:** 2026-08-26
 - **Repository:** `C:\Users\Jake\Coding\SpartacusLegends-RE`
@@ -16,7 +16,19 @@ git log -3 --oneline --decorate
 python -m unittest discover -s tests -p 'test_*.py'
 ```
 
-## Shipped baseline
+## Current shipped release
+
+Version `0.6.0` is publicly released with live-tested support for title
+versions `01.00` and `01.06`:
+
+- Annotated tag: `v0.6.0`
+- Required patch versions: `4.2` for 01.00 and `4.4` for 01.06
+- Release:
+  `https://github.com/DeprivedPeasant/SpartacusLegends-Preservation/releases/tag/v0.6.0`
+- Release ZIP SHA-256:
+  `cc418ec415f4553af7af90064d73c9486f2546d0356dd55d6c09f5001c610be1`
+
+## v0.5.0 migration baseline retained
 
 Version `0.5.0` is publicly released. It adds automatic v0.3 -> v0.4 save
 migration to the v0.4.0 native persistence baseline:
