@@ -123,6 +123,14 @@ class PersistenceModeTests(unittest.TestCase):
         args = parse_args(["--legacy-roster-bridge"])
         self.assertTrue(args.legacy_roster_bridge)
 
+    def test_title_save_replacement_requires_two_explicit_flags(self):
+        args = parse_args([
+            "--migrate-01.00-to-01.06",
+            "--replace-existing-01.06",
+        ])
+        self.assertTrue(args.migrate_01_00_to_01_06)
+        self.assertTrue(args.replace_existing_01_06)
+
 
 if __name__ == "__main__":
     unittest.main()

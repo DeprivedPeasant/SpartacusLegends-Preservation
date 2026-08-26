@@ -192,6 +192,43 @@ state. It never overwrites the other build's campaign object. Backing up the
 entire `data` directory preserves both namespaces and the selected-version
 configuration.
 
+An explicit 01.00-to-01.06 migration is available while RPCS3 and the server
+are closed:
+
+```text
+.\SpartacusLegendsServer.exe --migrate-01.00-to-01.06
+```
+
+The command requires all three exact-size 01.00 native objects plus
+`data\profile.json`. It validates their economy balances, creates a timestamped
+copy of the complete `data` directory beneath `backups`, refuses to overwrite
+any existing 01.06 save, copies the compatible profile layout, extends the
+roster with its new zero-initialized trailing word, and extends the campaign
+object with the zero-initialized 01.06-only `0x400`-byte area. It then exits
+without starting the network server. An audit record is written to
+`data\migration-01.00-to-01.06.json`.
+
+If an unwanted fallback 01.06 save was already created, the migration still
+refuses it by default. After confirming that the existing 01.06 state may be
+discarded, use both explicit flags:
+
+```text
+.\SpartacusLegendsServer.exe --migrate-01.00-to-01.06 --replace-existing-01.06
+```
+
+The complete `data` directory—including the replaced 01.06 state—is copied to
+`backups` before anything is replaced. Do not use the replacement flag if the
+existing 01.06 profile contains progress you want to keep.
+
+This conversion was live-validated with a progressed 01.00 profile: all six
+gladiators, equipment, purchased slots, currency/fame, and Primus progress
+loaded; the client rewrote all three objects at native 01.06 sizes; an Ashur
+Nemesis completion and new equipment then survived a full server restart and
+cold boot. Keep the reported backup anyway. On the first 01.06 boot,
+verify roster/equipment and purchased slots, gold/silver/fame, ordinary
+campaign/Primus progress, clean Daily Goals and Nemesis state, then make a new
+change and verify it again after a second cold boot.
+
 The compatibility patch retains the local section-1 profile apply as a safe
 fallback. RPCS3's `PRG-DATA` profile can initialize fame, currency, and related
 values before a native type-1 object exists; when the server has a valid type-1

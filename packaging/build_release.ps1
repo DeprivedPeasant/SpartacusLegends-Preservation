@@ -41,6 +41,8 @@ if ($LASTEXITCODE -ne 0) {
     --hidden-import prudp_server `
     --hidden-import roster_bridge `
     --hidden-import legend_recovery `
+    --hidden-import migration_coordinator `
+    --hidden-import title_save_migration `
     --hidden-import UbiOnlineConfigService.spartacus_onlineconfig `
     --distpath $DistRoot `
     --workpath (Join-Path $BuildRoot 'pyinstaller-work') `
@@ -69,6 +71,7 @@ Copy-Item -Force -LiteralPath (Join-Path $DistRoot 'SpartacusLegendsServer.exe')
 Copy-Item -Force -LiteralPath (Join-Path $DistRoot 'SpartacusLegendsPatchInstaller.exe') -Destination $PackageRoot
 Copy-Item -Force -LiteralPath (Join-Path $PSScriptRoot 'SpartacusLegends_ServerPatch.yml') -Destination $PackageRoot
 Copy-Item -Force -LiteralPath (Join-Path $ProjectRoot 'README.md') -Destination $PackageRoot
+Copy-Item -Force -LiteralPath (Join-Path $ProjectRoot 'MIGRATION_GUIDE.md') -Destination $PackageRoot
 
 $ZipPath = Join-Path $DistRoot "SpartacusLegends-Preservation-v$Version.zip"
 Compress-Archive -Force -Path (Join-Path $PackageRoot '*') -DestinationPath $ZipPath

@@ -180,6 +180,20 @@ def parse_args(argv=None):
                         help="inspect owned Legends for re-recruitment and exit")
     parser.add_argument("--apply-recovery", action="store_true",
                         help="apply --recover-legends after making a full backup")
+    parser.add_argument("--migrate-01.00-to-01.06",
+                        dest="migrate_01_00_to_01_06",
+                        action="store_true",
+                        help="create an isolated, backup-first 01.06 save "
+                             "from complete 01.00 native saves, "
+                             "then exit; existing 01.06 data is not "
+                             "overwritten unless the separate replacement "
+                             "flag is supplied")
+    parser.add_argument("--replace-existing-01.06",
+                        dest="replace_existing_01_06",
+                        action="store_true",
+                        help="with --migrate-01.00-to-01.06, replace an "
+                             "existing unwanted 01.06 save only after the "
+                             "complete data directory is backed up")
     parser.add_argument("--no-wait", action="store_true",
                         help="do not pause on a startup error")
     parser.add_argument("--run-seconds", type=float, default=0,
@@ -402,6 +416,39 @@ def main() -> int:
         sys.stdout.reconfigure(line_buffering=True)
     args = parse_args()
     base_dir = application_dir()
+    if args.replace_existing_01_06 and not args.migrate_01_00_to_01_06:
+        print("MIGRATION ERROR: --replace-existing-01.06 requires "
+              "--migrate-01.00-to-01.06", file=sys.stderr)
+        maybe_pause(args.no_wait)
+        return 2
+    if args.migrate_01_00_to_01_06:
+        if args.apply_recovery or args.recover_legends is not None:
+            print("MIGRATION ERROR: the title-save migration cannot be "
+                  "combined with Legend recovery", file=sys.stderr)
+            maybe_pause(args.no_wait)
+            return 2
+        import title_save_migration
+        try:
+            result = title_save_migration.migrate_v100_to_v106(
+                base_dir / "data",
+                replace_existing=args.replace_existing_01_06,
+            )
+        except title_save_migration.TitleSaveMigrationError as error:
+            print(f"MIGRATION ERROR: {error}", file=sys.stderr)
+            maybe_pause(args.no_wait)
+            return 2
+        print("01.00 -> 01.06 save migration created.")
+        print(f"Pre-migration backup: {result.backup_path}")
+        print(f"01.06 native saves: {result.destination_root}")
+        print(f"01.06 economy profile: {result.companion_path}")
+        print("Recovered balances: "
+              f"gold {result.balances['gold']}, "
+              f"silver {result.balances['silver']}, "
+              f"fame {result.balances['fame']}")
+        print(f"Audit record: {result.marker_path}")
+        print("Cold-boot 01.06 and validate campaign, roster, "
+              "balances, Daily Goals, and Nemesis state before relying on it.")
+        return 0
     try:
         args.title_version, version_source = resolve_title_version(
             args.title_version, base_dir)

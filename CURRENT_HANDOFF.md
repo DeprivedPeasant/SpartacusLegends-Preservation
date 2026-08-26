@@ -321,6 +321,40 @@ known blocker.
 
 The full automated suite contains 177 passing tests after these changes.
 
+## Live-validated 01.00 -> 01.06 save migration
+
+An explicit backup-first migration is implemented in
+`tools/title_save_migration.py` and exposed through
+`SpartacusLegendsServer.exe --migrate-01.00-to-01.06`. Normal startup never
+invokes it, and it refuses any existing 01.06 namespace, companion, or marker.
+It requires exact-size complete 01.00 native objects and `profile.json`, checks
+gold/silver against the native profile, recovers old unstored fame from the
+native `+0x14` field, backs up the complete `data` directory, and records an
+auditable marker with hashes.
+
+For users who already created an unwanted fallback 01.06 save, the separate
+`--replace-existing-01.06` flag may be combined with the migration command.
+The default still refuses replacement. The explicit replacement path validates
+the 01.00 source and backs up the complete `data` directory—including the old
+01.06 state—before replacing only the versioned destination, companion, and
+marker. It must not be used when the existing 01.06 progress should be kept.
+
+The conversion preserves the old profile, appends a zeroed `0x400`-byte
+Nemesis/new-feature extension to campaign (`0x1804 -> 0x1C04`), and appends a
+zeroed trailer word to roster (`0x53C4 -> 0x53C8`). The first live roster
+attempt incorrectly passed through `0x53C4`: the client downloaded it and the
+server replayed all six Shop ownership records, but format 4 fell back to one
+gladiator. Static dispatch confirmed its native branch requires `0x53C8`.
+
+The corrected conversion passed end to end on 2026-08-26. First boot restored
+all six gladiators/equipment/slots, profile values `999710 / 1046714 / 7748`,
+and previous Primus progress, with clean Nemesis state. Buying/equipping a
+training item and completing Ashur 1 caused exact-size native 01.06 rewrites
+of all three objects and values `999683 / 1047092 / 7853`; Ashur 2 unlocked.
+After a full server restart, the second cold boot restored the complete roster,
+new item, balances/fame, Primus state, and Ashur 2. Six focused migration tests
+were added alongside CLI coverage; the full suite is now 184 tests.
+
 The automatic-version/isolation release-candidate test also passed end to end
 with the packaged v0.5.0 executables on 2026-08-26. The installer read
 `rpcs3-B`'s `APP_VER=01.06`, wrote `data/server-config.json`, and the server
