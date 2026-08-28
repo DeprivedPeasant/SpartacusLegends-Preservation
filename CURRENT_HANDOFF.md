@@ -1,4 +1,4 @@
-# Current AI handoff — v0.6.2 release candidate
+# Current AI handoff — v0.6.2 released checkpoint
 
 - **Checkpoint:** 2026-08-28
 - **Repository:** `C:\Users\Jake\Coding\SpartacusLegends-RE`
@@ -18,20 +18,21 @@ python -m unittest discover -s tests -p 'test_*.py'
 
 ## Current shipped release
 
-Version `0.6.1` is publicly released. It retains live-tested title versions
-`01.00` and `01.06` and adds the live-validated, backup-first 01.00 -> 01.06
-native-save migration documented later in this handoff:
+Version `0.6.2` is publicly released. It retains live-tested title versions
+`01.00` and `01.06`, adds v1.06 Daily Login and Shop quantity/metadata
+fidelity, and includes the live-validated cold-boot Boost persistence fix:
 
-- Release commit: `9401053e103740496e57943609c2742bfef484f8`
-- Annotated tag: `v0.6.1`
+- Release commit: `8da2f193f62fc34ce6aa90a90053fa1cd8910ffe`
+- Annotated tag: `v0.6.2`
 - Required patch versions: `4.2` for 01.00 and `4.4` for 01.06
 - Release:
-  `https://github.com/DeprivedPeasant/SpartacusLegends-Preservation/releases/tag/v0.6.1`
+  `https://github.com/DeprivedPeasant/SpartacusLegends-Preservation/releases/tag/v0.6.2`
 - Release ZIP SHA-256:
-  `702613743195f1dcf454f5a60e1a7fe0fb0367f790cecc5f86981d8023571a3a`
-- Final tagged validation: 184 tests passed; a fresh extraction exercised both
-  packaged executables, first migration, safe refusal, explicit backed-up
-  replacement, expected initial object sizes, and 01.06 server configuration.
+  `f75d6d26b7650f6bb723dedd61b136a17354edb8dbbfdc143d8edd631ef9975d`
+- Release ZIP: 16,654,725 bytes.
+- Final tagged validation: 206 tests passed; a fresh extraction exercised both
+  packaged executables, alternate-port checks, full packaged server startup,
+  expected release contents, and the v1.06 CLI configuration.
 
 ## v0.5.0 migration baseline retained
 
@@ -380,7 +381,7 @@ Advertising the RPCS3 bind address instead caused repeated auth SYNs with no
 accepted SYN-ACK. Do not infer `--advertise-host` directly from RPCS3's Bind
 address; ordinary unbound single-client setups should keep loopback defaults.
 
-Before any `01.06` release:
+Before the v0.6.0 `01.06` release (historical checklist):
 
 1. ~~Finish the wider 01.06 gameplay regression.~~ **DONE for the exercised
    single-player path.** Fight reward/profile readback, level-up unlock
@@ -402,7 +403,7 @@ Before any `01.06` release:
    the installer. No cross-version campaign conversion is attempted, and the
    v0.3 JSON/PINE migration path is restricted to 01.00.
 
-## v0.6.2 release work
+## v0.6.2 release contents
 
 This release carries the v1.06 Daily Login and consumable-boost fidelity work.
 The opt-in protocol-107 implementation, successful reward-screen and
