@@ -451,6 +451,93 @@ class MonetizationResponseTests(unittest.TestCase):
         )
         self.assertEqual(struct.unpack_from("<Q", body, 36)[0], packed_time)
 
+    def test_affected_monetization_histories_are_fragmented(self):
+        # The affected user's successive logs contained 73 and 97 persisted
+        # transactions, yielding 1194- and 1578-byte RMC messages. Both must
+        # cross the wire as two packets rather than one oversized datagram.
+        for transaction_count, expected_body_size in ((73, 1180), (97, 1564)):
+            with self.subTest(transaction_count=transaction_count):
+                body = p.encode_monetization_server_time(
+                    transactions=[
+                        (60000 + index, 1)
+                        for index in range(transaction_count)
+                    ]
+                )
+                rmc = p.build_rmc_response(102, 42, 8, body)
+
+                self.assertEqual(len(body), expected_body_size)
+                self.assertGreater(len(rmc), p.PRUDP_FRAGMENT_SIZE)
+                self.assertEqual(p.data_fragment_count(rmc), 2)
+                packets = p.build_data_fragments(
+                    0x10, 0x2F, 0xA5, 100, 0x12345678, rmc
+                )
+                decoded = [self.decode_fragment(packet) for packet in packets]
+                self.assertEqual(len(packets), 2)
+                self.assertEqual(
+                    [entry[0]["fragment_id"] for entry in decoded], [1, 0]
+                )
+                self.assertEqual(b"".join(entry[1] for entry in decoded), rmc)
+                self.assertTrue(all(len(packet) <= 1000 for packet in packets))
+
+    def decode_fragment(self, packet):
+        info = p.parse(packet)
+        self.assertIsNotNone(info)
+        self.assertTrue(info["checksum_ok"])
+        plain = p.rc4(p.KEY_DATA, info["payload"])
+        self.assertEqual(plain[0], 0)
+        return info, plain[1:]
+
+    def test_large_response_uses_ordered_fragments_and_final_zero(self):
+        payload = bytes(index & 0xFF for index in range(2000))
+        packets = p.build_data_fragments(
+            0x10, 0x2F, 0xA5, 100, 0x12345678, payload
+        )
+
+        self.assertEqual(len(packets), 3)
+        decoded = [self.decode_fragment(packet) for packet in packets]
+        infos = [entry[0] for entry in decoded]
+        self.assertEqual([info["fragment_id"] for info in infos], [1, 2, 0])
+        self.assertEqual([info["sequence_id"] for info in infos], [100, 101, 102])
+        self.assertTrue(all(
+            info["flags"] == p.FLAG_NEED_ACK
+            for info in infos
+        ))
+        self.assertEqual([len(entry[1]) for entry in decoded], [962, 962, 76])
+        self.assertEqual(b"".join(entry[1] for entry in decoded), payload)
+
+    def test_single_fragment_retains_final_zero_marker(self):
+        packets = p.build_data_fragments(
+            0x10, 0x2F, 0xA5, 0xFFFF, 0x12345678, b"small"
+        )
+
+        self.assertEqual(len(packets), 1)
+        info, payload = self.decode_fragment(packets[0])
+        self.assertEqual(info["fragment_id"], 0)
+        self.assertEqual(info["sequence_id"], 0xFFFF)
+        self.assertEqual(payload, b"small")
+
+    def test_explicit_reliable_flag_is_preserved_for_push_messages(self):
+        packets = p.build_data_fragments(
+            0x10, 0x2F, 0xA5, 10, 0x12345678, b"push",
+            flags=p.FLAG_RELIABLE | p.FLAG_NEED_ACK,
+        )
+
+        info, payload = self.decode_fragment(packets[0])
+        self.assertEqual(
+            info["flags"], p.FLAG_RELIABLE | p.FLAG_NEED_ACK
+        )
+        self.assertEqual(payload, b"push")
+
+    def test_fragment_sequence_wraps_at_u16_boundary(self):
+        packets = p.build_data_fragments(
+            0x10, 0x2F, 0xA5, 0xFFFF, 0x12345678,
+            b"x" * (p.PRUDP_FRAGMENT_SIZE + 1),
+        )
+
+        infos = [self.decode_fragment(packet)[0] for packet in packets]
+        self.assertEqual([info["sequence_id"] for info in infos], [0xFFFF, 0])
+        self.assertEqual([info["fragment_id"] for info in infos], [1, 0])
+
     def test_shop_method_24_encodes_exact_owned_record_shape(self):
         body = p.encode_shop_records([(1000, 1), (1007, 0)])
 

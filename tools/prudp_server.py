@@ -41,6 +41,12 @@ ACCESS_KEY = b"pbuT0dSs"
 CHECKSUM_BASE = sum(ACCESS_KEY) & 0xFF
 KEY_DATA = b"CD&ML"
 
+# Nintendo's PRUDP v0 transport uses a 1000-byte MTU and a 962-byte maximum
+# logical fragment payload. RMC responses larger than this must be split into
+# acknowledged DATA packets. Fragment ids count upward from one; an id of zero
+# marks the final fragment (and is also used by an unfragmented message).
+PRUDP_FRAGMENT_SIZE = 962
+
 # GRO derives the kerberos ticket key from the account password, defaulting
 # to "UbiDummyPwd". This title's binary contains "PS3NPDummyPwd" (next to
 # "DummySonyNP@quazal.com"), which is very likely the PS3 equivalent - the
@@ -1414,6 +1420,43 @@ def build(source, destination, ptype, flags, session_id, sequence_id,
     return pkt + bytes([calc_checksum(pkt)])
 
 
+def build_data_fragments(source, destination, session_id, sequence_id,
+                         signature, payload,
+                         fragment_size=PRUDP_FRAGMENT_SIZE,
+                         flags=FLAG_NEED_ACK):
+    """Build one or more ordered PRUDP DATA packets for an RMC message.
+
+    Compression framing and RC4 encryption are deliberately applied by
+    ``build`` to each fragment independently, matching Quazal's payload
+    encoder. ``sequence_id`` is the first server sequence number consumed;
+    callers must reserve one additional sequence number per returned packet.
+    """
+    if fragment_size <= 0:
+        raise ValueError("fragment_size must be positive")
+
+    chunks = [
+        payload[offset:offset + fragment_size]
+        for offset in range(0, len(payload), fragment_size)
+    ] or [b""]
+    packets = []
+    for index, chunk in enumerate(chunks):
+        fragment_id = 0 if index == len(chunks) - 1 else index + 1
+        packets.append(build(
+            source, destination, TYPE_DATA,
+            flags,
+            session_id, (sequence_id + index) & 0xFFFF,
+            signature=signature, fragment_id=fragment_id, payload=chunk,
+        ))
+    return packets
+
+
+def data_fragment_count(payload, fragment_size=PRUDP_FRAGMENT_SIZE):
+    """Return how many sequence ids a fragmented DATA message consumes."""
+    if fragment_size <= 0:
+        raise ValueError("fragment_size must be positive")
+    return max(1, (len(payload) + fragment_size - 1) // fragment_size)
+
+
 # ---------------------------------------------------------------- RMC
 
 def parse_rmc(payload_plain):
@@ -1763,16 +1806,17 @@ def main(port=None, stop_event=None, ready_event=None, host="0.0.0.0"):
             params = build_notification_params()
             rmc_msg = build_rmc_request(PROTO_NOTIFICATION,
                                         state["next_call"], 1, params)
-            pkt = build(state["server_port"], state["client_port"],
-                        TYPE_DATA, FLAG_RELIABLE | FLAG_NEED_ACK,
-                        state["session"], state["next_seq"],
-                        signature=state["signature"], fragment_id=0,
-                        payload=rmc_msg)
+            packets = build_data_fragments(
+                state["server_port"], state["client_port"],
+                state["session"], state["next_seq"], state["signature"],
+                rmc_msg, flags=FLAG_RELIABLE | FLAG_NEED_ACK,
+            )
             try:
-                srv.sendto(pkt, state["addr"])
+                for pkt in packets:
+                    srv.sendto(pkt, state["addr"])
                 log(f"-> PUSH GlobalNotificationEvent(14) method=1 "
                     f"call={state['next_call']} seq={state['next_seq']} "
-                    f"({len(pkt)}B, rmc={len(rmc_msg)}B)")
+                    f"({len(packets)} fragment(s), rmc={len(rmc_msg)}B)")
             except OSError as e:
                 log(f"   !! notification send failed: {e}")
 
@@ -2797,14 +2841,19 @@ def main(port=None, stop_event=None, ready_event=None, host="0.0.0.0"):
                         build_rmc_response(rmc["protocol"], rmc["call_id"],
                                            rmc["method_id"], resp_body)
                     )
-                    pkt = build(src, dst, TYPE_DATA, FLAG_NEED_ACK, sess,
-                                seq + 1,
-                                signature=client_conn_sig.get(addr, 0),
-                                fragment_id=0, payload=rmc_msg)
-                    srv.sendto(pkt, addr)
+                    packets = build_data_fragments(
+                        src, dst, sess, seq + 1,
+                        client_conn_sig.get(addr, 0), rmc_msg,
+                    )
+                    for pkt in packets:
+                        srv.sendto(pkt, addr)
                     conn_key = (addr, info["source"])
-                    remember_server_sequence(conn_key, seq + 2)
-                    log(f"-> {label} RESPONSE ({len(pkt)}B, rmc={len(rmc_msg)}B)")
+                    remember_server_sequence(
+                        conn_key, seq + 1 + len(packets)
+                    )
+                    packet_sizes = ",".join(str(len(pkt)) for pkt in packets)
+                    log(f"-> {label} RESPONSE ({len(packets)} fragment(s): "
+                        f"{packet_sizes}B, rmc={len(rmc_msg)}B)")
 
                     if ((rmc["protocol"], rmc["method_id"]) ==
                             NOTIFY_TRIGGER_RMC[NOTIFY_TRIGGER]

@@ -312,6 +312,27 @@ game's PPU cache, and cold-boot. Normal RPCN accounts are used; do not share
 credentials. If a match fails, report which client hosted, the queue type, and
 both RPCS3 logs.
 
+## v0.6.3 release notes
+
+This hotfix restores startup for profiles with large persisted purchase
+histories. v0.6.2 could encode Shop method 8 into a single PRUDP datagram larger
+than the title's supported payload, so the client acknowledged the transport
+packet but never completed the RMC call. Campaign and roster enumeration then
+never began, appearing as missing save data or an endlessly loading campaign
+menu.
+
+The server now fragments oversized RMC responses into 962-byte logical pieces,
+numbers intermediate fragments from `1`, marks the final fragment with `0`, and
+advances the packet sequence for every piece. The exact affected 73- and
+97-transaction response sizes are covered by regression tests. A live test with
+an affected user's isolated save acknowledged both fragments, continued through
+campaign and roster enumeration, and restored the complete save successfully.
+
+No save migration is required. Replace the v0.6.2 server files with v0.6.3 while
+RPCS3 is closed and keep the existing `data` directory. As with every release,
+extract the ZIP into a permanent folder before running it; do not launch the
+server from inside the ZIP or a Windows temporary directory.
+
 ## v0.6.2 release notes
 
 This patch release adds the live-validated v1.06 Daily Login and Shop fidelity

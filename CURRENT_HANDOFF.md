@@ -1,4 +1,4 @@
-# Current AI handoff — v0.6.2 released checkpoint
+# Current AI handoff — v0.6.3 release checkpoint
 
 - **Checkpoint:** 2026-08-28
 - **Repository:** `C:\Users\Jake\Coding\SpartacusLegends-RE`
@@ -16,7 +16,21 @@ git log -3 --oneline --decorate
 python -m unittest discover -s tests -p 'test_*.py'
 ```
 
-## Current shipped release
+## Current release
+
+Version `0.6.3` is the PRUDP fragmentation hotfix for `0.6.2`. Shop method 8
+responses larger than 962 logical bytes are split into acknowledged DATA
+packets with intermediate fragment IDs `1..n`, final ID `0`, and sequential
+packet IDs. Small RMC responses retain the title-validated v0.6.2 framing.
+
+The affected 73-transaction save was tested from an isolated copy. Its
+1194-byte method-8 RMC response was sent as 975- and 245-byte packets; the
+client acknowledged both, requested campaign type `0x80000002` and roster type
+`0x80000003`, restored the complete save, and subsequently uploaded exact-size
+7172-byte campaign and 21448-byte roster objects. The automated suite contains
+211 passing tests at this checkpoint.
+
+## Previous shipped release
 
 Version `0.6.2` is publicly released. It retains live-tested title versions
 `01.00` and `01.06`, adds v1.06 Daily Login and Shop quantity/metadata
