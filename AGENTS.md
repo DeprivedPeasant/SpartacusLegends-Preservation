@@ -4,6 +4,28 @@ Read `CURRENT_HANDOFF.md` before doing project work. It is the current
 checkpoint. `notes/00-plan.md` is a chronological research archive with many
 superseded conclusions and is never the starting document.
 
+## Economical delegation
+
+The `multimodels` MCP server is available for economical delegation. Confirm
+the currently enabled model IDs with `list_models` before delegating. The
+expected models are:
+
+- `deepseek:deepseek-v4-flash`
+- `zai:glm-5.3-flash`
+
+Use `delegate_task` only for bounded, token-heavy subtasks. Delegate
+asynchronously by default and continue useful local work; retrieve the result
+later with `check_task` rather than polling in a loop. Critically verify every
+delegated answer before using it or applying changes. Do not send secrets or
+unnecessary files to a delegated model.
+
+Vastly prefer `zai:glm-5.3-flash` for coding, debugging, protocol analysis,
+and other work requiring technical judgment. It is the default delegated model
+for substantive engineering tasks. Use `deepseek:deepseek-v4-flash` primarily
+for very fast, straightforward, low-judgment work such as broad searches,
+mechanical summaries, or initial triage; do not rely on it for nuanced coding
+conclusions without especially careful independent verification.
+
 ## Project and supported build
 
 - Repository: `C:\Users\Jake\Coding\SpartacusLegends-RE`

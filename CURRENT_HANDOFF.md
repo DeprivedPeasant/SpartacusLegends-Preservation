@@ -1,4 +1,4 @@
-# Current AI handoff — v0.6.3 release checkpoint
+# Current AI handoff — v0.6.4 release-candidate checkpoint
 
 - **Checkpoint:** 2026-08-28
 - **Repository:** `C:\Users\Jake\Coding\SpartacusLegends-RE`
@@ -29,6 +29,79 @@ client acknowledged both, requested campaign type `0x80000002` and roster type
 `0x80000003`, restored the complete save, and subsequently uploaded exact-size
 7172-byte campaign and 21448-byte roster objects. The automated suite contains
 211 passing tests at this checkpoint.
+
+## Unreleased post-v0.6.3 reliable-fragment hotfix
+
+User testing found that v0.6.3's fragments were transport-ACKed but method 8
+was not fully applied: purchased Ludus slots were not restored and the
+recruitment shop could return to its refresh loop. The v0.6.3 live test had
+proved only that bootstrap continued after both ACKs; it had not explicitly
+checked slot entitlements or the recruitment timer.
+
+The original legacy Quazal implementation provides the missing transport
+semantics. Ordinary RMC replies below 963 logical bytes remain `NEED_ACK` and
+use request sequence plus one. Replies at the 963-byte fragmentation threshold
+enter a separate `RELIABLE | NEED_ACK` substream whose sequence counter starts
+at one per connection and resets on reconnect. Fragment IDs still rise from
+one with final zero, and compression framing plus RC4 remain independent per
+packet. The working tree implements those rules in `tools/prudp_server.py` and
+adds focused threshold, sequencing, reconnect, and affected-response tests in
+`tests/test_prudp_responses.py`. The full suite contains 214 passing tests.
+
+This correction passed a two-boot live test using only the isolated copy at
+`.build/affected-save-reliable-live-20260828-231427`; the reported user's
+source data was not modified. On the first boot, the 1194-byte method-8 reply
+was sent as 976/244-byte reliable fragments on sequence IDs 1/2. Its saved
+transaction history did not yet contain slot products, but the recruitment
+timer was correct and the shop no longer refreshed repeatedly, proving the
+fragmented callback was applied. Jake repurchased the slots, adding products
+`80002..80007`. After closing RPCS3 and cold-booting again, method 8 replayed
+all six products in a 1290-byte reply sent as 976/340-byte reliable fragments;
+the new connection correctly restarted at sequence IDs 1/2. The client
+restored every purchased slot, retained the correct timer, and showed no
+refresh loop. RPCS3 was closed before the isolated server, which then stopped
+cleanly.
+
+### v0.6.4 release-candidate validation
+
+The unreleased fix is versioned `0.6.4` and has passed source, packaging, and
+live validation. The source suite contains 214 passing tests, the relevant
+Python modules compile, `git diff --check` passes, and the two distributed
+patch YAML files are byte-identical.
+
+The release candidate was built only through
+`packaging/build_release.ps1`. Its artifact is:
+
+- ZIP: `dist/SpartacusLegends-Preservation-v0.6.4.zip`
+- Size: `16,657,004` bytes
+- SHA-256: `77282e03edb5b4088173634e2eed74e7ab2b327466acad3ddd900ce962f77916`
+- Server executable SHA-256:
+  `4d95f265d69afff20b4a46b0e547c9fb0aab72e990bb2d7d24ab7fba82d5a97b`
+- Installer executable SHA-256:
+  `3c4e6434493213efef1432de42591bc9f5849b77ec87c49bcef76592279edf57`
+
+A completely fresh extraction at
+`.build/release-validation-v0.6.4-20260828-233324` contained only the expected
+five release files. Both packaged executables passed `--help`; the packaged
+server started and stopped cleanly on alternate ports as v0.6.4, selected
+title version 01.06, used `data/usercontent/01.06`, enabled Daily Login by
+default, and made no normal-mode PINE connection. The packaged installer was
+also exercised against the closed clean `rpcs3-B` installation: initial
+verification correctly found its missing server configuration, installation
+completed, a second verification returned `SETUP OK`, backups were created,
+and the packaged server subsequently selected 01.06 from that installer
+configuration.
+
+The final packaged live test used a separate hash-verified save copy at
+`.build/release-live-v0.6.4-20260828-233527`. The method-8 response replayed
+all purchased slot records `80002..80007` in a 1290-byte response split into
+976/340-byte reliable packets. The client ACKed connection-local reliable
+sequence IDs 1 and 2 and continued bootstrap. Jake confirmed the complete
+live checklist: save restoration, purchased slots, recruitment timer, and
+shop behavior were all correct. RPCS3 then sent a normal DISCONNECT and was
+closed before the packaged server, which stopped cleanly. This completes the
+v0.6.4 RC validation gate. No release commit, tag, push, or GitHub release has
+yet been made.
 
 ## Previous shipped release
 
@@ -657,7 +730,7 @@ if ($a -ne $b) { throw 'Distributed patch YAML files differ' }
 powershell -ExecutionPolicy Bypass -File packaging\build_release.ps1
 ```
 
-At this checkpoint the full suite contains 206 tests. The number will grow as
+At this checkpoint the full suite contains 214 tests. The number will grow as
 coverage is added; do not hard-code a test count into future acceptance logic.
 
 ## Dead ends and corrections not to repeat

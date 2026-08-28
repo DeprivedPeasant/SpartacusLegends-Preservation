@@ -41,11 +41,11 @@ ACCESS_KEY = b"pbuT0dSs"
 CHECKSUM_BASE = sum(ACCESS_KEY) & 0xFF
 KEY_DATA = b"CD&ML"
 
-# Nintendo's PRUDP v0 transport uses a 1000-byte MTU and a 962-byte maximum
-# logical fragment payload. RMC responses larger than this must be split into
-# acknowledged DATA packets. Fragment ids count upward from one; an id of zero
-# marks the final fragment (and is also used by an unfragmented message).
-PRUDP_FRAGMENT_SIZE = 962
+# The legacy Quazal RMC transport used by this title fragments at 963 logical
+# bytes (GROBackendWV's MaxRmcPayloadSize). Fragmented RMC replies use the
+# reliable substream; ordinary one-packet replies do not. Fragment ids count
+# upward from one and zero marks the final fragment (and an unfragmented reply).
+PRUDP_FRAGMENT_SIZE = 963
 
 # GRO derives the kerberos ticket key from the account password, defaulting
 # to "UbiDummyPwd". This title's binary contains "PS3NPDummyPwd" (next to
@@ -1457,6 +1457,36 @@ def data_fragment_count(payload, fragment_size=PRUDP_FRAGMENT_SIZE):
     return max(1, (len(payload) + fragment_size - 1) // fragment_size)
 
 
+def build_rmc_response_fragments(source, destination, session_id,
+                                 request_sequence_id, reliable_sequence_id,
+                                 signature, payload,
+                                 fragment_size=PRUDP_FRAGMENT_SIZE):
+    """Build an RMC reply and return ``(packets, next_reliable_sequence)``.
+
+    Legacy Quazal uses the request-derived sequence for an ordinary RMC reply.
+    A reply at the fragmentation threshold instead enters a separate reliable
+    substream whose counter starts at one for each connection. Only that path
+    adds ``FLAG_RELIABLE`` and advances the reliable counter.
+    """
+    fragment_count = data_fragment_count(payload, fragment_size)
+    if len(payload) >= fragment_size:
+        sequence_id = reliable_sequence_id
+        flags = FLAG_RELIABLE | FLAG_NEED_ACK
+        next_reliable_sequence = (
+            reliable_sequence_id + fragment_count
+        ) & 0xFFFF
+    else:
+        sequence_id = (request_sequence_id + 1) & 0xFFFF
+        flags = FLAG_NEED_ACK
+        next_reliable_sequence = reliable_sequence_id
+
+    packets = build_data_fragments(
+        source, destination, session_id, sequence_id, signature, payload,
+        fragment_size=fragment_size, flags=flags,
+    )
+    return packets, next_reliable_sequence
+
+
 # ---------------------------------------------------------------- RMC
 
 def parse_rmc(payload_plain):
@@ -1889,6 +1919,7 @@ def main(port=None, stop_event=None, ready_event=None, host="0.0.0.0"):
                         "session": sess,
                         "signature": client_conn_sig[addr],
                         "next_seq": (seq + 1) & 0xFFFF,
+                        "next_reliable_seq": 1,
                         "next_call": 0x70000000,
                         "account_username": account_context.get("username"),
                         "account_pid": account_context.get("pid"),
@@ -2841,15 +2872,30 @@ def main(port=None, stop_event=None, ready_event=None, host="0.0.0.0"):
                         build_rmc_response(rmc["protocol"], rmc["call_id"],
                                            rmc["method_id"], resp_body)
                     )
-                    packets = build_data_fragments(
-                        src, dst, sess, seq + 1,
-                        client_conn_sig.get(addr, 0), rmc_msg,
-                    )
+                    conn_key = (addr, info["source"])
+                    with state_lock:
+                        response_state = connection_state.get(conn_key)
+                        reliable_sequence = (
+                            response_state.get("next_reliable_seq", 1)
+                            if response_state is not None else 1
+                        )
+                        (
+                            packets,
+                            next_reliable_sequence,
+                        ) = build_rmc_response_fragments(
+                            src, dst, sess, seq, reliable_sequence,
+                            client_conn_sig.get(addr, 0), rmc_msg,
+                        )
+                        if (response_state is not None and
+                                next_reliable_sequence != reliable_sequence):
+                            response_state["next_reliable_seq"] = (
+                                next_reliable_sequence
+                            )
                     for pkt in packets:
                         srv.sendto(pkt, addr)
-                    conn_key = (addr, info["source"])
                     remember_server_sequence(
-                        conn_key, seq + 1 + len(packets)
+                        conn_key,
+                        seq + (2 if len(packets) == 1 else 1),
                     )
                     packet_sizes = ",".join(str(len(pkt)) for pkt in packets)
                     log(f"-> {label} RESPONSE ({len(packets)} fragment(s): "

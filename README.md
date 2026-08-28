@@ -312,6 +312,32 @@ game's PPU cache, and cold-boot. Normal RPCN accounts are used; do not share
 credentials. If a match fails, report which client hosted, the queue type, and
 both RPCS3 logs.
 
+## v0.6.4 release notes
+
+This hotfix completes the oversized Shop method-8 transport correction begun
+in v0.6.3. Although v0.6.3 split large replies into multiple acknowledged
+packets, it sent them on the ordinary response stream. The client could ACK the
+packets without applying the complete transaction list, causing purchased
+gladiator slots to disappear after a cold boot and allowing the recruitment
+shop refresh loop to return.
+
+Fragmented RMC replies now use the title's legacy Quazal reliable substream:
+`RELIABLE | NEED_ACK`, a connection-local sequence counter beginning at `1`,
+963-byte logical fragments, ascending intermediate fragment IDs, final ID `0`,
+and independent compression framing and RC4 encryption for each packet.
+Replies below the fragmentation threshold remain byte-compatible with prior
+working releases.
+
+The affected save was validated across two cold boots using an isolated copy.
+The first boot applied the fragmented server time and eliminated repeated shop
+refreshes. After slot products `80002` through `80007` were purchased into that
+test copy, the second boot replayed all six records in a 1,290-byte response,
+reset the reliable sequence to `1, 2`, and restored every purchased slot with
+the correct recruitment timer.
+
+No save migration is required. Close RPCS3, replace the v0.6.3 server files
+with v0.6.4, and retain the existing `data` directory.
+
 ## v0.6.3 release notes
 
 This hotfix restores startup for profiles with large persisted purchase

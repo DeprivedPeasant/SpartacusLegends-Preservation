@@ -455,7 +455,11 @@ class MonetizationResponseTests(unittest.TestCase):
         # The affected user's successive logs contained 73 and 97 persisted
         # transactions, yielding 1194- and 1578-byte RMC messages. Both must
         # cross the wire as two packets rather than one oversized datagram.
-        for transaction_count, expected_body_size in ((73, 1180), (97, 1564)):
+        cases = (
+            (73, 1180, [976, 244]),
+            (97, 1564, [976, 628]),
+        )
+        for transaction_count, expected_body_size, expected_packet_sizes in cases:
             with self.subTest(transaction_count=transaction_count):
                 body = p.encode_monetization_server_time(
                     transactions=[
@@ -468,15 +472,27 @@ class MonetizationResponseTests(unittest.TestCase):
                 self.assertEqual(len(body), expected_body_size)
                 self.assertGreater(len(rmc), p.PRUDP_FRAGMENT_SIZE)
                 self.assertEqual(p.data_fragment_count(rmc), 2)
-                packets = p.build_data_fragments(
-                    0x10, 0x2F, 0xA5, 100, 0x12345678, rmc
+                packets, next_reliable = p.build_rmc_response_fragments(
+                    0x10, 0x2F, 0xA5, 100, 1, 0x12345678, rmc
                 )
                 decoded = [self.decode_fragment(packet) for packet in packets]
                 self.assertEqual(len(packets), 2)
                 self.assertEqual(
                     [entry[0]["fragment_id"] for entry in decoded], [1, 0]
                 )
+                self.assertEqual(
+                    [entry[0]["sequence_id"] for entry in decoded], [1, 2]
+                )
+                self.assertTrue(all(
+                    entry[0]["flags"] ==
+                    p.FLAG_RELIABLE | p.FLAG_NEED_ACK
+                    for entry in decoded
+                ))
+                self.assertEqual(next_reliable, 3)
                 self.assertEqual(b"".join(entry[1] for entry in decoded), rmc)
+                self.assertEqual(
+                    [len(packet) for packet in packets], expected_packet_sizes
+                )
                 self.assertTrue(all(len(packet) <= 1000 for packet in packets))
 
     def decode_fragment(self, packet):
@@ -502,8 +518,69 @@ class MonetizationResponseTests(unittest.TestCase):
             info["flags"] == p.FLAG_NEED_ACK
             for info in infos
         ))
-        self.assertEqual([len(entry[1]) for entry in decoded], [962, 962, 76])
+        self.assertEqual([len(entry[1]) for entry in decoded], [963, 963, 74])
         self.assertEqual(b"".join(entry[1] for entry in decoded), payload)
+
+    def test_single_rmc_response_does_not_enter_reliable_substream(self):
+        packets, next_reliable = p.build_rmc_response_fragments(
+            0x10, 0x2F, 0xA5, 41, 7, 0x12345678, b"small"
+        )
+
+        info, payload = self.decode_fragment(packets[0])
+        self.assertEqual(info["sequence_id"], 42)
+        self.assertEqual(info["flags"], p.FLAG_NEED_ACK)
+        self.assertEqual(payload, b"small")
+        self.assertEqual(next_reliable, 7)
+
+    def test_rmc_response_at_fragment_threshold_uses_reliable_substream(self):
+        payload = b"x" * p.PRUDP_FRAGMENT_SIZE
+        packets, next_reliable = p.build_rmc_response_fragments(
+            0x10, 0x2F, 0xA5, 41, 7, 0x12345678, payload
+        )
+
+        info, decoded_payload = self.decode_fragment(packets[0])
+        self.assertEqual(info["fragment_id"], 0)
+        self.assertEqual(info["sequence_id"], 7)
+        self.assertEqual(
+            info["flags"], p.FLAG_RELIABLE | p.FLAG_NEED_ACK
+        )
+        self.assertEqual(decoded_payload, payload)
+        self.assertEqual(next_reliable, 8)
+
+    def test_fragmented_rmc_responses_advance_separate_reliable_substream(self):
+        payload = b"x" * (p.PRUDP_FRAGMENT_SIZE + 1)
+
+        first, next_reliable = p.build_rmc_response_fragments(
+            0x10, 0x2F, 0xA5, 200, 1, 0x12345678, payload
+        )
+        second, after_second = p.build_rmc_response_fragments(
+            0x10, 0x2F, 0xA5, 201, next_reliable,
+            0x12345678, payload
+        )
+        reconnected, after_reconnect = p.build_rmc_response_fragments(
+            0x10, 0x2F, 0xB6, 10, 1, 0x87654321, payload
+        )
+
+        first_infos = [self.decode_fragment(packet)[0] for packet in first]
+        second_infos = [self.decode_fragment(packet)[0] for packet in second]
+        reconnect_infos = [
+            self.decode_fragment(packet)[0] for packet in reconnected
+        ]
+        self.assertEqual(
+            [info["sequence_id"] for info in first_infos], [1, 2]
+        )
+        self.assertEqual(
+            [info["sequence_id"] for info in second_infos], [3, 4]
+        )
+        self.assertEqual(
+            [info["sequence_id"] for info in reconnect_infos], [1, 2]
+        )
+        self.assertTrue(all(
+            info["flags"] == p.FLAG_RELIABLE | p.FLAG_NEED_ACK
+            for info in first_infos + second_infos + reconnect_infos
+        ))
+        self.assertEqual(after_second, 5)
+        self.assertEqual(after_reconnect, 3)
 
     def test_single_fragment_retains_final_zero_marker(self):
         packets = p.build_data_fragments(
