@@ -319,15 +319,15 @@ work. Method 8 now restores persisted permanent purchases and consumable
 remaining-use counts across cold boots; method 9 consumes one use and persists
 the result. v1.06 Boost pages receive their ordinary retail price metadata for
 all requested Boost IDs `60000`–`60023`, while method 8 remains authoritative
-for ownership and quantities. The opt-in Daily Login service can be enabled
-with:
+for ownership and quantities. The live-validated seven-stage Daily Login
+service is enabled automatically during normal startup. To disable it for
+troubleshooting, start the server with:
 
 ```powershell
-SpartacusLegendsServer.exe --daily-login-rewards
+SpartacusLegendsServer.exe --no-daily-login-rewards
 ```
 
-It persists the seven-stage reward schedule and claims atomically. Normal
-startup remains unchanged unless this flag is supplied.
+Its reward schedule and claims persist atomically.
 
 ## What the server runs
 

@@ -123,10 +123,13 @@ class PersistenceModeTests(unittest.TestCase):
         args = parse_args(["--legacy-roster-bridge"])
         self.assertTrue(args.legacy_roster_bridge)
 
-    def test_daily_login_rewards_require_explicit_opt_in(self):
-        self.assertFalse(parse_args([]).daily_login_rewards)
+    def test_daily_login_rewards_are_enabled_by_default(self):
+        self.assertTrue(parse_args([]).daily_login_rewards)
         self.assertTrue(
             parse_args(["--daily-login-rewards"]).daily_login_rewards
+        )
+        self.assertFalse(
+            parse_args(["--no-daily-login-rewards"]).daily_login_rewards
         )
 
     def test_title_save_replacement_requires_two_explicit_flags(self):

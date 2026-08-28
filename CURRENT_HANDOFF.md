@@ -406,7 +406,7 @@ Before the v0.6.0 `01.06` release (historical checklist):
 ## v0.6.2 release contents
 
 This release carries the v1.06 Daily Login and consumable-boost fidelity work.
-The opt-in protocol-107 implementation, successful reward-screen and
+The default-on protocol-107 implementation, successful reward-screen and
 currency/item claim tests, and live-proven Shop method-9/method-10 quantity
 semantics are recorded in `notes/16-v106-daily-login-boost-handoff.md`.
 
@@ -491,11 +491,10 @@ listed it in `owned_items` but lacked an `item_quantities` entry. The intentiona
 legacy compatibility fallback assigns one use to an owned consumable with no
 saved count. This is prior test-profile history, not a synthetic default grant.
 
-At this checkpoint the full suite has 206 passing tests, and normal startup
-still leaves Daily Login disabled. The live test uses only
-`.build\daily-login-live-20260827`. Never touch authoritative player saves.
-During the last exchange Jake drove RPCS3 and the isolated server was running
-in the local Codex terminal; server and game state must always be re-checked
+Daily Login is enabled by default in normal startup; the explicit
+`--no-daily-login-rewards` switch is retained for troubleshooting. The live
+research used only `.build\daily-login-live-20260827`. Never touch
+authoritative player saves. Server and game state must always be re-checked
 in-process before any restart.
 
 ## Shipped migration implementation (historical reference)
@@ -679,8 +678,9 @@ Verify the checkpoint with:
   python -m unittest discover -s tests -p 'test_*.py'
 
 The v1.06 Daily Login and consumable-boost work is included in v0.6.2. Daily
-Login remains behind an explicit opt-in flag, Shop method 9 decrements Face
-Carver uses, method 8 restores persisted quantities, and method 3 supplies
-ordinary retail metadata for Boost IDs 60000..60023. Do not alter player save
-data outside an explicitly isolated live test.
+Login is enabled by default with an explicit `--no-daily-login-rewards`
+troubleshooting switch. Shop method 9 decrements Face Carver uses, method 8
+restores persisted quantities, and method 3 supplies ordinary retail metadata
+for Boost IDs 60000..60023. Do not alter player save data outside an explicitly
+isolated live test.
 ```
