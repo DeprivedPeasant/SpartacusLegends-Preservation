@@ -18,6 +18,90 @@ import prudp_server as p
 from UbiOnlineConfigService import spartacus_onlineconfig
 
 
+class MonetizationInventoryResponseTests(unittest.TestCase):
+    def test_price_probe_parser_accepts_multiple_u32_rows(self):
+        self.assertEqual(
+            p.parse_inventory_price_probe("60001:10:0, 60020:0:500"),
+            {60001: (10, 0), 60020: (0, 500)},
+        )
+
+    def test_price_probe_parser_rejects_malformed_or_negative_rows(self):
+        for value in ("60001:10", "60001:-1:0"):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                p.parse_inventory_price_probe(value)
+
+    def test_price_probe_can_advertise_one_unowned_requested_item(self):
+        self.assertEqual(
+            p.method_3_response_items(
+                [60100, 60101],
+                [],
+                title_version="01.06",
+                price_probe={60101: (10, 0)},
+            ),
+            [60101],
+        )
+
+    def test_v106_advertises_prices_for_owned_and_unowned_boosts(self):
+        self.assertEqual(
+            p.method_3_response_items(
+                [60001, 60002, 60003, 10250],
+                [60002, 10250],
+                title_version="01.06",
+                price_probe={},
+            ),
+            [60001, 60002, 60003, 10250],
+        )
+
+    def test_v106_gold_boost_row_repeats_retail_as_ordinary_price(self):
+        row = p.encode_inventory_item(60003, title_version="01.06")
+
+        self.assertEqual(struct.unpack_from("<I", row, 0)[0], 60003)
+        self.assertEqual(
+            struct.unpack_from("<I?II?II", row, 7),
+            (0, False, 10, 0, False, 0, 0),
+        )
+
+    def test_v106_silver_boost_row_preserves_both_catalog_price_words(self):
+        row = p.encode_inventory_item(60020, title_version="01.06")
+
+        self.assertEqual(
+            struct.unpack_from("<I?II?II", row, 7),
+            (0, False, 1, 500, False, 0, 0),
+        )
+
+    def test_v100_inventory_row_bytes_are_unchanged(self):
+        row = p.encode_inventory_item(60003, title_version="01.00")
+
+        self.assertEqual(
+            struct.unpack_from("<I?II?II", row, 7),
+            (0, False, 0, 0, False, 1, 0),
+        )
+
+    def test_v106_omits_consumables_that_method_8_restores(self):
+        items = [10250, 60000, 60020, 60063, 80002]
+
+        self.assertEqual(
+            p.method_3_inventory_items(items, title_version="01.06"),
+            [10250, 80002],
+        )
+
+    def test_v100_inventory_behavior_is_unchanged(self):
+        items = [10250, 60000, 60020, 60063, 80002]
+
+        self.assertEqual(
+            p.method_3_inventory_items(items, title_version="01.00"),
+            items,
+        )
+
+    def test_only_the_exact_consumable_family_is_suppressed(self):
+        items = [59999, 60000, 60063, 60064]
+
+        self.assertEqual(
+            p.method_3_inventory_items(items, title_version="01.06"),
+            [59999, 60064],
+        )
+
+
 class TournamentResponseTests(unittest.TestCase):
     """Protocol 105 method 7, GetJoinedSeason in title version 01.06."""
 
@@ -92,6 +176,36 @@ class V106InactiveResponseTests(unittest.TestCase):
         self.assertEqual(len(body), 11)
         self.assertEqual(struct.unpack("<?I??I", body),
                          (False, 0, False, False, 0))
+
+    def test_login_reward_list_preserves_retail_database_order(self):
+        rewards = [
+            (1, 0, 0, 300, 0, 0),
+            (2, 60008, 1, 0, 0, 0),
+        ]
+        body = p.encode_v106_daily_login_reward_list(rewards)
+
+        self.assertEqual(len(body), 4 + 2 * 24)
+        self.assertEqual(struct.unpack_from("<I", body), (2,))
+        self.assertEqual(
+            struct.unpack_from("<6I", body, 4),
+            (1, 0, 0, 300, 0, 0),
+        )
+        self.assertEqual(
+            struct.unpack_from("<6I", body, 28),
+            (2, 60008, 1, 0, 0, 0),
+        )
+
+    def test_login_reward_wire_order_differs_from_challenge_wire_order(self):
+        reward = (9, 130031, 2, 4000, 20, 3000)
+
+        self.assertEqual(
+            struct.unpack("<6I", p.encode_v106_daily_login_reward(reward)),
+            reward,
+        )
+        self.assertEqual(
+            struct.unpack("<6I", p.encode_v106_challenge_reward(reward)),
+            (9, 20, 4000, 3000, 130031, 2),
+        )
 
     def test_challenge_empty_lists(self):
         for method in (2, 4):
@@ -315,6 +429,25 @@ class MonetizationResponseTests(unittest.TestCase):
         self.assertEqual(
             struct.unpack_from("<IQI", body, 20),
             (80004, packed_time, 1),
+        )
+
+    def test_monetization_method_8_preserves_consumable_quantity(self):
+        value = datetime.datetime(
+            2026, 8, 24, 21, 3, 27, tzinfo=datetime.timezone.utc
+        )
+        packed_time = p.encode_qdatetime(value)
+        body = p.encode_monetization_server_time(
+            value, transactions=[(80002, 1), (60020, 17)]
+        )
+
+        self.assertEqual(struct.unpack_from("<I", body, 0)[0], 2)
+        self.assertEqual(
+            struct.unpack_from("<IQI", body, 4),
+            (80002, packed_time, 1),
+        )
+        self.assertEqual(
+            struct.unpack_from("<IQI", body, 20),
+            (60020, packed_time, 17),
         )
         self.assertEqual(struct.unpack_from("<Q", body, 36)[0], packed_time)
 

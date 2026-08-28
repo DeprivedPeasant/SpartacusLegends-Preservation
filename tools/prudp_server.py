@@ -238,16 +238,10 @@ P102_METHOD_SHAPES = {
     # the implemented m6/m11/m13.
     5: "balances",
     # case body 0x00018EBC - exactly one u32, read into output slot 0 (or
-    # consumed and discarded when the caller passes no slot).  Live-traced
-    # (2026-08-12): that u32 is the UPDATED GOLD BALANCE, not a status code.
-    # m9 follows an m7 purchase carrying the same item id (execution boosts),
-    # and m15 is the perk replacement <gladiator, perk, 2>; answering either
-    # with 0 set the player's on-screen gold to zero.  Return the authoritative
-    # balance instead.  Nothing is debited here: m9's cost was already taken by
-    # the preceding m7, and m15's third parameter is not confirmed to be a cost
-    # (it lacks the -1 "unused currency" sentinel that m7/m11/m13 costs carry).
-    9: "gold",
-    10: "gold",
+    # consumed and discarded when the caller passes no slot). Methods 14/15
+    # are live-validated gold responses. Method 9 is handled explicitly below:
+    # a fight with an equipped boost proved it consumes one use and returns the
+    # remaining count.
     14: "gold",
     15: "gold",
     # case body 0x00019010 - a list built with the same list decoder as m3
@@ -261,6 +255,27 @@ P102_METHOD_SHAPES = {
 STORE_REFRESH_SENTINEL = 99999
 SLOT_ENTITLEMENT_MIN = 80002
 SLOT_ENTITLEMENT_MAX = 80007
+CONSUMABLE_ITEM_ID_MIN = 60000
+CONSUMABLE_ITEM_ID_MAX = 60063
+# Runtime v1.06 Boost catalog prices captured before any Shop-method-3 merge.
+# Tuples are (gold, silver). Some silver-priced boosts retain an ignored
+# one-gold value in the catalog; preserving both words matches the client data.
+V106_CONSUMABLE_RETAIL_PRICES = {
+    60000: (0, 0),
+    60001: (10, 0), 60002: (10, 0), 60003: (10, 0),
+    60004: (12, 0), 60005: (10, 0), 60006: (20, 0), 60007: (20, 0),
+    60008: (1, 500), 60009: (3, 0),
+    60010: (1, 500), 60011: (3, 0),
+    60012: (1, 500), 60013: (3, 0),
+    60014: (1, 500), 60015: (3, 0),
+    60016: (1, 500), 60017: (3, 0),
+    60018: (1, 500), 60019: (3, 0),
+    60020: (1, 500), 60021: (3, 0),
+    60022: (1, 500), 60023: (3, 0),
+}
+# Retail Face Carver grants one five-use stack. Other consumable stack sizes
+# remain unknown and retain the legacy one-unit fallback until verified.
+CONSUMABLE_STACK_USES = {60020: 5}
 PROTO_NAMES = {0x0A: "TicketGranting", 0x0B: "SecureConnection",
                0x0E: "GlobalNotificationEvent", 102: "Monetization",
                105: "Tournament", 106: "PatchVersion",
@@ -282,8 +297,14 @@ class EconomyStore:
             "silver": 200,
             "fame": 0,
             "owned_items": [],
+            "item_quantities": {},
             "claimed_challenges": [],
             "daily_challenges": {"date": "", "claimed": []},
+            "daily_login": {
+                "last_login_date": "",
+                "rewards": [],
+                "schedule": [],
+            },
         }
         self._load()
 
@@ -304,6 +325,20 @@ class EconomyStore:
                 for item in loaded.get("owned_items", [])
                 if (int(item) & 0xFFFFFFFF) != STORE_REFRESH_SENTINEL
             })
+            loaded_quantities = loaded.get("item_quantities", {})
+            if not isinstance(loaded_quantities, dict):
+                loaded_quantities = {}
+            owned_items = set(self.data["owned_items"])
+            quantities = {}
+            for item, quantity in loaded_quantities.items():
+                try:
+                    item = int(item) & 0xFFFFFFFF
+                    quantity = max(0, min(99, int(quantity)))
+                except (TypeError, ValueError):
+                    continue
+                if item in owned_items:
+                    quantities[item] = quantity
+            self.data["item_quantities"] = quantities
             self.data["claimed_challenges"] = sorted({
                 int(challenge_id)
                 for challenge_id in loaded.get("claimed_challenges", [])
@@ -321,6 +356,56 @@ class EconomyStore:
             self.data["daily_challenges"] = {
                 "date": daily_date,
                 "claimed": daily_claimed,
+            }
+            daily_login = loaded.get("daily_login", {})
+            if not isinstance(daily_login, dict):
+                daily_login = {}
+            login_rewards = []
+            for reward in daily_login.get("rewards", []):
+                try:
+                    candidate = tuple(int(value) for value in reward)
+                except (TypeError, ValueError):
+                    continue
+                if len(candidate) != 6:
+                    continue
+                stage = candidate[0]
+                if candidate in V106_DAILY_LOGIN_REWARDS.get(stage, ()):
+                    login_rewards.append(list(candidate))
+            # A valid stash is an ordered prefix of the seven retail stages.
+            if [reward[0] for reward in login_rewards] != \
+                    list(range(1, len(login_rewards) + 1)):
+                login_rewards = []
+            login_schedule = []
+            for reward in daily_login.get("schedule", []):
+                try:
+                    candidate = tuple(int(value) for value in reward)
+                except (TypeError, ValueError):
+                    continue
+                if len(candidate) != 6:
+                    continue
+                stage = candidate[0]
+                if candidate in V106_DAILY_LOGIN_REWARDS.get(stage, ()):
+                    login_schedule.append(list(candidate))
+            if [reward[0] for reward in login_schedule] != list(range(1, 8)):
+                login_schedule = []
+            # Profiles written by the first experimental build have a stash
+            # but no seven-stage schedule. Reconstruct one deterministically
+            # while retaining every already-selected earned reward.
+            if login_rewards and not login_schedule:
+                try:
+                    seed_date = datetime.date.fromisoformat(str(
+                        daily_login.get("last_login_date", "")
+                    ))
+                except ValueError:
+                    seed_date = datetime.date(1970, 1, 1)
+                login_schedule = self._daily_login_schedule(seed_date)
+                login_schedule[:len(login_rewards)] = login_rewards
+            self.data["daily_login"] = {
+                "last_login_date": str(
+                    daily_login.get("last_login_date", "")
+                ),
+                "rewards": login_rewards,
+                "schedule": login_schedule,
             }
         except FileNotFoundError:
             pass
@@ -361,13 +446,20 @@ class EconomyStore:
     def purchase(self, item_id, gold_cost, silver_cost):
         with self.lock:
             owned = set(self.data["owned_items"])
-            if item_id not in owned:
+            consumable_uses = CONSUMABLE_STACK_USES.get(item_id)
+            if item_id not in owned or consumable_uses is not None:
                 if gold_cost >= 0:
                     self.data["gold"] = max(0, self.data["gold"] - gold_cost)
                 if silver_cost >= 0:
                     self.data["silver"] = max(0, self.data["silver"] - silver_cost)
+                previous_quantity = (
+                    self.item_quantity(item_id) if item_id in owned else 0
+                )
                 owned.add(item_id)
                 self.data["owned_items"] = sorted(owned)
+                self.data["item_quantities"][item_id] = min(
+                    99, previous_quantity + (consumable_uses or 1)
+                )
                 self._save()
             return self.data["gold"], self.data["silver"]
 
@@ -386,6 +478,24 @@ class EconomyStore:
             owned = set(self.data["owned_items"])
             return [item for item in requested if item in owned]
 
+    def item_quantity(self, item_id):
+        """Return a consumable's persisted uses with a legacy-safe fallback."""
+        with self.lock:
+            if item_id not in set(self.data["owned_items"]):
+                return 0
+            return self.data["item_quantities"].get(
+                item_id, CONSUMABLE_STACK_USES.get(item_id, 1)
+            )
+
+    def consume_item(self, item_id):
+        """Consume one use and atomically persist the remaining count."""
+        with self.lock:
+            remaining = max(0, self.item_quantity(item_id) - 1)
+            if item_id in set(self.data["owned_items"]):
+                self.data["item_quantities"][item_id] = remaining
+                self._save()
+            return remaining
+
     def slot_entitlements(self):
         """Return the persisted purchases that unlock Ludus roster slots."""
         with self.lock:
@@ -393,6 +503,28 @@ class EconomyStore:
                 item for item in self.data["owned_items"]
                 if SLOT_ENTITLEMENT_MIN <= item <= SLOT_ENTITLEMENT_MAX
             ]
+
+    def method_8_transactions(self):
+        """Return the complete purchase/quantity snapshot replayed at login.
+
+        Method 7 makes a purchase visible immediately, but that client state is
+        volatile. Method 8 reconstructs the purchase history on a cold boot:
+        permanent equipment, perks and slot entitlements are idempotent
+        quantity-one records, while consumables carry their persisted
+        remaining-use count. Zero-count consumables have no positive state to
+        seed and are omitted.
+        """
+        with self.lock:
+            owned = set(self.data["owned_items"])
+            transactions = []
+            for item in sorted(owned):
+                if CONSUMABLE_ITEM_ID_MIN <= item <= CONSUMABLE_ITEM_ID_MAX:
+                    quantity = self.item_quantity(item)
+                    if quantity > 0:
+                        transactions.append((item, quantity))
+                else:
+                    transactions.append((item, 1))
+            return transactions
 
     def claim_challenge_reward(self, reward, daily=False, claim_date=None):
         """Credit one retail challenge reward exactly once per claim scope."""
@@ -446,9 +578,136 @@ class EconomyStore:
                 return []
             return list(state["claimed"])
 
+    def register_daily_login(self, login_date=None):
+        """Add at most one retail daily-login stage for a UTC date."""
+        if login_date is None:
+            login_date = datetime.datetime.now(datetime.timezone.utc).date()
+        login_date_text = login_date.isoformat()
+        with self.lock:
+            state = self.data["daily_login"]
+            if state["last_login_date"] == login_date_text:
+                return False
+            rewards = state["rewards"]
+            next_stage = len(rewards) + 1
+            if next_stage > len(V106_DAILY_LOGIN_REWARDS):
+                return False
+            if not state["schedule"]:
+                state["schedule"] = self._daily_login_schedule(login_date)
+            reward = tuple(state["schedule"][next_stage - 1])
+            rewards.append(list(reward))
+            state["last_login_date"] = login_date_text
+            self._save()
+            return True
+
+    @staticmethod
+    def _daily_login_schedule(seed_date):
+        """Choose and return one complete seven-stage retail reward cycle."""
+        schedule = []
+        for stage in range(1, 8):
+            alternatives = V106_DAILY_LOGIN_REWARDS[stage]
+            # Only stage 2 currently has alternatives. The stable cycle seed
+            # keeps its advertised item identical on every info read.
+            selected = alternatives[
+                seed_date.toordinal() % len(alternatives)
+            ]
+            schedule.append(list(selected))
+        return schedule
+
+    def daily_login_rewards(self):
+        """Return the currently accumulated, unclaimed login-reward stash."""
+        with self.lock:
+            return [tuple(reward) for reward in self.data["daily_login"]["rewards"]]
+
+    def daily_login_info(self, now=None):
+        """Return the schedule, current stage index, and UTC reset countdown.
+
+        The 01.06 client uses the first u32 as the zero-based highlighted
+        reward index.  It multiplies the second u32 by 1000 and clamps it to
+        86,400 seconds before starting its next-login timer.
+        """
+        if now is None:
+            now = datetime.datetime.now(datetime.timezone.utc)
+        elif now.tzinfo is None:
+            now = now.replace(tzinfo=datetime.timezone.utc)
+        else:
+            now = now.astimezone(datetime.timezone.utc)
+        tomorrow = datetime.datetime.combine(
+            now.date() + datetime.timedelta(days=1),
+            datetime.time.min,
+            tzinfo=datetime.timezone.utc,
+        )
+        seconds_until_reset = max(
+            1, min(86400, int((tomorrow - now).total_seconds()))
+        )
+        with self.lock:
+            schedule = [
+                tuple(reward)
+                for reward in self.data["daily_login"]["schedule"]
+            ]
+            earned_count = len(self.data["daily_login"]["rewards"])
+        current_stage_index = max(0, earned_count - 1)
+        return schedule, current_stage_index, seconds_until_reset
+
+    def claim_daily_login_rewards(self):
+        """Credit and clear the accumulated login rewards atomically."""
+        with self.lock:
+            rewards = [
+                tuple(reward)
+                for reward in self.data["daily_login"]["rewards"]
+            ]
+            if not rewards:
+                return []
+            owned = set(self.data["owned_items"])
+            for _stage, item_id, quantity, silver, gold, fame in rewards:
+                self.data["gold"] = max(0, self.data["gold"] + gold)
+                self.data["silver"] = max(0, self.data["silver"] + silver)
+                self.data["fame"] = max(0, self.data["fame"] + fame)
+                if item_id and quantity:
+                    owned.add(item_id)
+                    added = quantity * CONSUMABLE_STACK_USES.get(item_id, 1)
+                    current = self.data["item_quantities"].get(item_id, 0)
+                    self.data["item_quantities"][item_id] = min(
+                        99, current + added
+                    )
+            self.data["owned_items"] = sorted(owned)
+            self.data["daily_login"]["rewards"] = []
+            self.data["daily_login"]["schedule"] = []
+            self._save()
+            return rewards
+
 
 INVENTORY_PROBE = os.environ.get(
     "SPARTACUS_INVENTORY_PROBE", ""
+) not in ("", "0")
+
+
+def parse_inventory_price_probe(value):
+    """Parse diagnostic ``item:gold:silver`` rows from an environment value."""
+    result = {}
+    for entry in value.split(","):
+        entry = entry.strip()
+        if not entry:
+            continue
+        parts = entry.split(":")
+        if len(parts) != 3:
+            raise ValueError(
+                "SPARTACUS_INVENTORY_PRICE_PROBE entries must be "
+                "item:gold:silver"
+            )
+        item_id, gold, silver = (int(part, 0) for part in parts)
+        if not 0 <= item_id <= 0xFFFFFFFF \
+                or not 0 <= silver <= 0xFFFFFFFF \
+                or not 0 <= gold <= 0xFFFFFFFF:
+            raise ValueError("inventory price probe values must be u32")
+        result[item_id] = (gold, silver)
+    return result
+
+
+INVENTORY_PRICE_PROBE = parse_inventory_price_probe(os.environ.get(
+    "SPARTACUS_INVENTORY_PRICE_PROBE", ""
+))
+DAILY_LOGIN_REWARDS_ENABLED = os.environ.get(
+    "SPARTACUS_DAILY_LOGIN_REWARDS", ""
 ) not in ("", "0")
 
 # Diagnostic-only Method 3 records for three known-owned weapons.  Keeping
@@ -458,31 +717,96 @@ INVENTORY_PROBE_FIELDS = {
     10236: (0, True,  0, 0, False, 0, 0),  # boolean field 4 only
     10250: (0, False, 0, 0, True,  0, 0),  # boolean field 7 only
     10265: (0, True,  0, 0, True,  0, 0),  # both boolean fields
+    # The first live probe made the equipped boost recognizable but depleted.
+    # Method 10 was not called, so that state came entirely from this record.
+    # Keep the accepted entitlement fields and isolate the final u32 as the
+    # remaining-count candidate.
+    60020: (1, True, 0, 0, False, 1, 1),
 }
 
 
-def inventory_item_fields(item_id):
+def inventory_item_fields(item_id, title_version=None):
+    if item_id in INVENTORY_PRICE_PROBE:
+        gold, silver = INVENTORY_PRICE_PROBE[item_id]
+        # A/B are left unowned; C/D are the ordinary comparison price and
+        # E=false keeps the optional F/G sale pair inactive.
+        return (0, False, gold, silver, False, 0, 0)
     if INVENTORY_PROBE and item_id in INVENTORY_PROBE_FIELDS:
         return INVENTORY_PROBE_FIELDS[item_id]
+    if title_version is None:
+        title_version = os.environ.get("SPARTACUS_TITLE_VERSION", "01.00")
+    if title_version == "01.06" \
+            and item_id in V106_CONSUMABLE_RETAIL_PRICES:
+        gold, silver = V106_CONSUMABLE_RETAIL_PRICES[item_id]
+        return (0, False, gold, silver, False, 0, 0)
     return (0, False, 0, 0, False, 1, 0)
 
 
-def encode_inventory_item(item_id):
+def encode_inventory_item(item_id, title_version=None):
     """Encode the 9 fields read by Monetization method 3's item decoder."""
     return (struct.pack("<I", item_id)
             + struct.pack("<H", 1) + b"\x00"  # empty Quazal string
-            # The third field is rendered by the shop as a gold price when
-            # its following flag is true; our former (1, true) placeholder
-            # therefore changed owned items to "1 gold".  GetPurchasedItems
-            # carries field 8 forward as part of the client inventory state,
-            # making it the best-supported quantity/ownership candidate.
-            + struct.pack("<I?II?II", *inventory_item_fields(item_id)))
+            # A/B carry still-partial inventory state. C/D are ordinary
+            # gold/silver prices; E selects optional sale prices F/G.
+            + struct.pack("<I?II?II",
+                          *inventory_item_fields(item_id, title_version)))
 
 
-def encode_inventory(items):
+def encode_inventory(items, title_version=None):
     return struct.pack("<I", len(items)) + b"".join(
-        encode_inventory_item(item) for item in items
+        encode_inventory_item(item, title_version) for item in items
     )
+
+
+def method_3_inventory_items(items, title_version=None):
+    """Return owned IDs whose ownership metadata method 3 should advertise.
+
+    In 01.06 the still-partial A/B ownership fields can corrupt an owned
+    consumable's refill state. Method 8 already restores both ownership and
+    remaining uses, so owned consumables stay omitted here. Separate unowned
+    offer metadata is added by ``method_3_response_items``.
+
+    Keep 01.00 unchanged until the same merge behavior is established there.
+    """
+    if title_version is None:
+        title_version = os.environ.get("SPARTACUS_TITLE_VERSION", "01.00")
+    if title_version != "01.06":
+        return list(items)
+    return [
+        item for item in items
+        if not CONSUMABLE_ITEM_ID_MIN <= item <= CONSUMABLE_ITEM_ID_MAX
+    ]
+
+
+def method_3_response_items(requested, owned, title_version=None,
+                            price_probe=None):
+    """Select owned rows and v1.06 metadata rows in request order.
+
+    Method 8 remains authoritative for v1.06 Boost ownership and remaining
+    uses. Method 3 independently supplies ordinary-price metadata for every
+    requested Boost; its A/B fields do not disturb the method-8 quantity.
+    Omitting either owned or unowned Boosts leaves their original/comparison
+    price zero-initialized and incorrectly renders those cards on sale.
+    """
+    if title_version is None:
+        title_version = os.environ.get("SPARTACUS_TITLE_VERSION", "01.00")
+    selected = set(method_3_inventory_items(
+        owned, title_version=title_version
+    ))
+    owned = set(owned)
+    if title_version == "01.06":
+        selected.update(
+            item_id for item_id in requested
+            if item_id in V106_CONSUMABLE_RETAIL_PRICES
+        )
+    if price_probe is None:
+        price_probe = INVENTORY_PRICE_PROBE
+    selected.update(item_id for item_id in requested if item_id in price_probe)
+    result = []
+    for item_id in requested:
+        if item_id in selected and item_id not in result:
+            result.append(item_id)
+    return result
 
 
 def encode_qdatetime(value=None):
@@ -592,6 +916,26 @@ V106_CHALLENGE_REWARDS = {
 }
 V106_DAILY_CHALLENGE_IDS = frozenset(range(52, 73))
 
+# Retail 01.06 XML.dat DailyLogin_RewardSets rows.  The tuple order matches
+# the source table used by V106_CHALLENGE_REWARDS:
+#   stage, item_id, item_quantity, silver, gold, fame.
+# Stage 2 has eight equally weighted alternatives; a particular selection is
+# persisted when that stage is first granted so repeated reads cannot change
+# the pending reward.
+V106_DAILY_LOGIN_REWARDS = {
+    1: ((1, 0, 0, 300, 0, 0),),
+    2: tuple(
+        (2, item_id, 1, 0, 0, 0)
+        for item_id in (60008, 60010, 60012, 60014,
+                        60016, 60018, 60020, 60022)
+    ),
+    3: ((3, 0, 0, 700, 0, 0),),
+    4: ((4, 60006, 1, 0, 0, 0),),
+    5: ((5, 0, 0, 2000, 0, 0),),
+    6: ((6, 120051, 1, 0, 0, 0),),
+    7: ((7, 0, 0, 0, 10, 0),),
+}
+
 
 def encode_v106_challenge_reward(reward):
     """Encode a retail challenge-reward DB row in the 01.06 RPC order.
@@ -605,6 +949,24 @@ def encode_v106_challenge_reward(reward):
     reward_id, item_id, item_quantity, silver, gold, fame = reward
     return struct.pack(
         "<6I", reward_id, gold, silver, fame, item_id, item_quantity
+    )
+
+
+def encode_v106_daily_login_reward(reward):
+    """Encode a retail Daily Login row in LoginReward's native order.
+
+    Unlike Challenge's superficially similar six-u32 DTO, LoginReward keeps
+    the XML/database order on the wire: ``stage, item_id, item_quantity,
+    silver, gold, fame``.  The 01.06 claim callback at 0x00068EC8 reads those
+    exact offsets when applying the reward to the live economy.
+    """
+    return struct.pack("<6I", *reward)
+
+
+def encode_v106_daily_login_reward_list(rewards):
+    """Encode LoginReward's list of six-u32 Daily Login records."""
+    return struct.pack("<I", len(rewards)) + b"".join(
+        encode_v106_daily_login_reward(reward) for reward in rewards
     )
 
 
@@ -629,15 +991,19 @@ def encode_v106_protocol_response(protocol, method, params=b"", now=None):
 
     if protocol == PROTO_LOGIN_REWARD:
         if method == 1:
-            # Parser case reads one serialized bool.
+            # DailyLogin request stub 0x00034868 writes u32 + bool; its
+            # response parser reads one serialized bool.
             return struct.pack("<?", False)
         if method == 2:
-            # list<six-u32 record>, u32, u32
+            # GetDailyLoginInfo: list<Daily Login six-u32 record>, u32, u32.
             return struct.pack("<III", 0, 0, 0)
         if method == 3:
-            # list<six-u32 record>, u32, u32, Quazal DateTime
+            # GetDailyLoginInfoEx: list<Daily Login six-u32 record>, u32, u32,
+            # Quazal DateTime. Request stub 0x00033B3C has no input fields.
             return struct.pack("<IIIQ", 0, 0, 0, encode_qdatetime(now))
         if method == 4:
+            # ClaimLoginRewards request stub 0x00032E48 writes one u32 and
+            # receives a list of Daily Login six-u32 records.
             return struct.pack("<I", 0)
 
     if protocol == PROTO_DAILY_POPUP and method == 1:
@@ -790,12 +1156,22 @@ def encode_monetization_server_time(value=None, transactions=()):
     # is the right width but the wrong representation and produces an enormous
     # signed offset (and therefore multi-million-hour shop countdowns).
     packed_time = encode_qdatetime(value)
-    transactions = tuple(transactions)
+    transactions = tuple(
+        (int(transaction[0]), int(transaction[1]))
+        if isinstance(transaction, (tuple, list))
+        else (int(transaction), 1)
+        for transaction in transactions
+    )
     return (
         struct.pack("<I", len(transactions))
         + b"".join(
-            struct.pack("<IQI", int(item) & 0xFFFFFFFF, packed_time, 1)
-            for item in transactions
+            struct.pack(
+                "<IQI",
+                item & 0xFFFFFFFF,
+                packed_time,
+                max(0, min(0xFFFFFFFF, quantity)),
+            )
+            for item, quantity in transactions
         )
         + struct.pack("<Q", packed_time)
     )
@@ -1771,6 +2147,15 @@ def main(port=None, stop_event=None, ready_event=None, host="0.0.0.0"):
                         except struct.error:
                             requested = []
                         owned = ECONOMY.requested_owned_items(requested)
+                        advertised = method_3_response_items(requested, owned)
+                        suppressed = [
+                            item for item in owned if item not in advertised
+                        ]
+                        if suppressed:
+                            log("   *** Method 3 omitted v1.06 consumable "
+                                f"metadata={suppressed}; method 8 replay "
+                                "is authoritative ***")
+                        owned = advertised
                         resp_body = encode_inventory(owned)
                         label = "MONETIZATION_INVENTORY"
                         log(f"   *** Inventory requested={requested} owned={owned} ***")
@@ -1782,6 +2167,15 @@ def main(port=None, stop_event=None, ready_event=None, host="0.0.0.0"):
                             }
                             if probed:
                                 log(f"   *** Method 3 probe fields={probed} ***")
+                        if INVENTORY_PRICE_PROBE:
+                            probed = {
+                                item: INVENTORY_PRICE_PROBE[item]
+                                for item in owned
+                                if item in INVENTORY_PRICE_PROBE
+                            }
+                            if probed:
+                                log("   *** Method 3 price metadata probe="
+                                    f"{probed} ***")
                     elif rmc["method_id"] == 6:     # Deposit income
                         try:
                             gold_delta, silver_delta = struct.unpack_from(
@@ -1839,13 +2233,46 @@ def main(port=None, stop_event=None, ready_event=None, host="0.0.0.0"):
                                 f"silver_cost={silver_cost} -> balances "
                                 f"gold={gold} silver={silver} ***")
                     elif rmc["method_id"] == 8:     # Enumerate transactions/server time
-                        slot_entitlements = ECONOMY.slot_entitlements()
+                        transactions = ECONOMY.method_8_transactions()
                         resp_body = encode_monetization_server_time(
-                            transactions=slot_entitlements
+                            transactions=transactions
                         )
                         label = "MONETIZATION_SERVER_TIME"
-                        log("   *** Monetization server time; replaying slot "
-                            f"entitlements={slot_entitlements} ***")
+                        log("   *** Monetization server time; replaying "
+                            f"transactions={transactions} ***")
+                    elif rmc["method_id"] == 9:     # Consume one item use
+                        # Live Face Carver trace: this arrives at fight start
+                        # with one item id. Returning gold produced "x99"
+                        # because the client stores this u32 as remaining uses
+                        # and caps it at 99.
+                        try:
+                            item_id = struct.unpack_from(
+                                "<I", rmc["params"], 0
+                            )[0]
+                        except struct.error:
+                            item_id = 0
+                        quantity = ECONOMY.consume_item(item_id)
+                        resp_body = struct.pack("<I", quantity)
+                        label = "MONETIZATION_CONSUME_ITEM"
+                        log(f"   *** Consume item={item_id} "
+                            f"remaining={quantity} ***")
+                    elif rmc["method_id"] == 10:    # Get consumable remaining count
+                        # Static call chain: the v1.00 request stub at
+                        # 0x00016844 sends method 10 with one item id. The
+                        # "Restoring boost" path at 0x001DC994 stores its one
+                        # u32 response as the item's remaining count (capped at
+                        # 99 by 0x001DE174). This is not a gold-balance method.
+                        try:
+                            item_id = struct.unpack_from(
+                                "<I", rmc["params"], 0
+                            )[0]
+                        except struct.error:
+                            item_id = 0
+                        quantity = ECONOMY.item_quantity(item_id)
+                        resp_body = struct.pack("<I", quantity)
+                        label = "MONETIZATION_ITEM_QUANTITY"
+                        log(f"   *** Item quantity item={item_id} "
+                            f"remaining={quantity} ***")
                     elif rmc["method_id"] == 11:    # Finalize gladiator outcome
                         # Live death trace: this follows m12 (death notice) and
                         # m6 (fight income), carrying <Iii> = (gladiator id,
@@ -2161,6 +2588,67 @@ def main(port=None, stop_event=None, ready_event=None, host="0.0.0.0"):
                         )
                         log(f"   *** Challenge method {method} -> completed "
                             f"{completed} ***")
+
+                elif rmc and rmc["is_request"] \
+                        and rmc["protocol"] == PROTO_LOGIN_REWARD \
+                        and rmc["method_id"] in (1, 2, 3, 4) \
+                        and DAILY_LOGIN_REWARDS_ENABLED \
+                        and (PROTO_LOGIN_REWARD, rmc["method_id"]) \
+                        not in PROTO_OVERRIDES:
+                    method = rmc["method_id"]
+                    if method == 1:
+                        # Static request stub 0x00034868 serializes u32 + bool;
+                        # the response parser reads exactly one bool.
+                        try:
+                            player_pid = struct.unpack_from(
+                                "<I", rmc["params"], 0
+                            )[0]
+                            client_flag = struct.unpack_from(
+                                "<?", rmc["params"], 4
+                            )[0]
+                        except struct.error:
+                            player_pid, client_flag = 0, False
+                        granted = ECONOMY.register_daily_login()
+                        resp_body = struct.pack("<?", granted)
+                        label = "LOGINREWARD_DAILY_LOGIN"
+                        log(f"   *** DailyLogin pid=0x{player_pid:08x} "
+                            f"client_flag={client_flag} granted={granted} "
+                            f"stash={ECONOMY.daily_login_rewards()} ***")
+                    elif method in (2, 3):
+                        rewards, current_stage, reset_seconds = \
+                            ECONOMY.daily_login_info()
+                        resp_body = encode_v106_daily_login_reward_list(
+                            rewards
+                        )
+                        resp_body += struct.pack(
+                            "<II", current_stage, reset_seconds
+                        )
+                        if method == 3:
+                            resp_body += struct.pack("<Q", encode_qdatetime())
+                        label = f"LOGINREWARD_GET_INFO(m{method})"
+                        log(f"   *** LoginReward info method={method} "
+                            f"rewards={rewards} "
+                            f"current_stage={current_stage} "
+                            f"reset_seconds={reset_seconds} ***")
+                    else:
+                        # Static request stub 0x00032E48 serializes one u32;
+                        # the response is a list of the shared reward DTO.
+                        try:
+                            player_pid = struct.unpack_from(
+                                "<I", rmc["params"], 0
+                            )[0]
+                        except struct.error:
+                            player_pid = 0
+                        rewards = ECONOMY.claim_daily_login_rewards()
+                        resp_body = encode_v106_daily_login_reward_list(
+                            rewards
+                        )
+                        label = "LOGINREWARD_CLAIM"
+                        log(f"   *** ClaimLoginRewards "
+                            f"pid=0x{player_pid:08x} rewards={rewards} "
+                            f"balances=({ECONOMY.data['gold']}, "
+                            f"{ECONOMY.data['silver']}, "
+                            f"{ECONOMY.data['fame']}) ***")
 
                 elif rmc and rmc["is_request"] \
                         and (rmc["protocol"], rmc["method_id"]) \

@@ -118,8 +118,10 @@ main menu.
 
 To confirm the patch actually applied, open RPCS3's log after booting and look
 for the line beginning `PPU executable hash:`. It must read
-`PPU-81471d050c14f4d20b4027686f8b571dafd32394`. A different hash means the
-game build is not the supported one and no patch will apply to it.
+`PPU-81471d050c14f4d20b4027686f8b571dafd32394` for version 01.00 or
+`PPU-131aece6ae8526d13307be925f48c87f73c43799` for version 01.06. A different
+hash means the game build is not the supported one and no patch will apply to
+it.
 
 ## Manual setup
 
@@ -309,6 +311,23 @@ clear the
 game's PPU cache, and cold-boot. Normal RPCN accounts are used; do not share
 credentials. If a match fails, report which client hosted, the queue type, and
 both RPCS3 logs.
+
+## v0.6.2 release notes
+
+This patch release adds the live-validated v1.06 Daily Login and Shop fidelity
+work. Method 8 now restores persisted permanent purchases and consumable
+remaining-use counts across cold boots; method 9 consumes one use and persists
+the result. v1.06 Boost pages receive their ordinary retail price metadata for
+all requested Boost IDs `60000`–`60023`, while method 8 remains authoritative
+for ownership and quantities. The opt-in Daily Login service can be enabled
+with:
+
+```powershell
+SpartacusLegendsServer.exe --daily-login-rewards
+```
+
+It persists the seven-stage reward schedule and claims atomically. Normal
+startup remains unchanged unless this flag is supplied.
 
 ## What the server runs
 

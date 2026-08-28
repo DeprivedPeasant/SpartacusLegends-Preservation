@@ -1,6 +1,6 @@
-# Current AI handoff — v0.6.1 released checkpoint
+# Current AI handoff — v0.6.2 release candidate
 
-- **Checkpoint:** 2026-08-26
+- **Checkpoint:** 2026-08-28
 - **Repository:** `C:\Users\Jake\Coding\SpartacusLegends-RE`
 - **Supported title:** Spartacus Legends `NPUB30746`, versions `01.00` and
   `01.06`
@@ -402,7 +402,102 @@ Before any `01.06` release:
    the installer. No cross-version campaign conversion is attempted, and the
    v0.3 JSON/PINE migration path is restricted to 01.00.
 
-## Recommended next objective
+## v0.6.2 release work
+
+This release carries the v1.06 Daily Login and consumable-boost fidelity work.
+The opt-in protocol-107 implementation, successful reward-screen and
+currency/item claim tests, and live-proven Shop method-9/method-10 quantity
+semantics are recorded in `notes/16-v106-daily-login-boost-handoff.md`.
+
+A 2026-08-27 static session inside that note resolved the root cause of both
+failed overlays: boost counts live in a separate volatile singleton at
+`0x01A7FAA8`, not in the type-3 roster allocation. Counts are not serialized in
+any native object; do not attempt further UserContent byte injection.
+
+The original server path is now statically and live proven. Shop method 8's
+v1.06 family-6 replay handler loads the transaction quantity from record
+`+0x18` and passes it directly to count setter `0x00259980`. The emulator had
+returned method-8 records only for purchased Ludus slots, all at quantity 1.
+It now also returns owned consumables `60000..60063` with their persisted
+remaining counts, and the disproven roster overlay has been removed.
+
+First live cold boot replayed `[(60005, 1), (60020, 32), (60021, 1)]`. Ludus
+showed Face Carver x32 and Hold Still x1 with no depletion popup. No method-10
+request was needed. One fight then sent Shop method 9 for Face Carver, persisted
+32 -> 31, and a normal close/restart/cold boot restored Face Carver x31 and Hold
+Still x1 without a popup. This proves the complete server-only,
+restore-consume-persist-restore loop; do not add the proposed `0x002579F4` YAML
+predicate patch.
+
+The same method-8 path is also the general purchase-history reconstruction
+mechanism, not a slot/consumable-only endpoint. A user report exposed that
+permanent weapons and gear appeared owned only for the purchase session, then
+returned to the shop at `1 gold` after a restart; ownership challenges likewise
+fell back to the single native-roster item. The economy database still contained
+the purchases, but `method_8_transactions()` omitted every non-slot permanent
+item. Method 3's later requested-inventory response was too late to reconstruct
+the boot-time purchase state.
+
+Method 8 now replays every persisted non-consumable purchase at quantity 1,
+alongside slot products and consumables at their saved remaining counts;
+zero-count consumables remain omitted. The isolated profile first cold-booted
+with permanent items `10250`, `10296`, `30001`, `30005`, and `50002`: all stayed
+owned without the `1 gold` repurchase state, and the Dual Swords challenge read
+`2/5`. Jake then purchased Bent Iron Gladii (`10311`, 2,980 silver) and Dented
+Iron Swords (`10282`, 3,580 silver). After a normal shutdown and second cold
+boot, both remained owned, neither showed the `1 gold` state, and the challenge
+remained `4/5`. The full suite passed 196 tests at that checkpoint.
+
+### v1.06 owned-boost prices and the separate sale overlay
+
+Historical 01.00 footage proves a consumable can simultaneously show
+`PURCHASED x5` and its nonzero refill price. The method-3 purchased-item DTO's
+first numeric/bool pair is price/currency metadata: the earlier `(1, true)`
+probe rendered `1 gold`, while the normal fabricated `(0, false)` rendered
+owned boosts as `0 silver` in 01.06.
+
+A controlled 01.06 cold boot suppressed only method-3 consumable rows while
+leaving complete method-8 replay enabled. Face Carver restored at `x31` and
+displayed its original `500 silver` refill price. This proves method 8 is
+sufficient for owned-boost quantity/ownership and method 3 was overwriting the
+retail catalog. `method_3_inventory_items()` now omits IDs `60000..60063` only
+for 01.06; 01.00 behavior remains unchanged. Three focused tests cover version
+selection and exact ID boundaries; the full suite is now 199 passing.
+
+The same test independently proved the universal `SALE!` overlay is not method
+3: it remained on every unowned boost, with a crossed-out zero, even when
+method 3 returned no consumable rows. The correct catalog price remained above
+it and was used by purchases. A later read-only live snapshot proved both the
+KFF sale-source count and runtime sale-manager count are zero. The Market
+controller's sale-class bytes at `+0x20AC..+0x20BA` are also all zero, exactly
+matching the native initializer's calls to `0x00276550`. Thus the title's
+native sale manager does not classify these cards as active sales.
+
+Static comparison also corrected a false lead: v1.00 and v1.06 construct
+`saleEquip%dT` with the same widget lookup class, and both gate the named
+`showSale` animation on the same widget-internal null check. The only direct
+v1.06 call to that animation routine is an input-event path at `0x001EC0C0`;
+Jake's opening-Ludus test did not hit its breakpoint. It is therefore not the
+source of the cards already visible when the screen opens. Surviving February
+2014 build notes say the patch which added Daily Goals also fixed an incorrect
+`Sale` overlay on silver boosts and made category-sale items work, making the
+remaining issue most likely a default Market timeline/configuration state, not
+Shop transaction metadata. Treat this as a separate cosmetic/configuration
+issue; do not reintroduce method-3 price records to address it.
+
+Health Boost (`60005`) displayed x1 because the isolated test profile already
+listed it in `owned_items` but lacked an `item_quantities` entry. The intentional
+legacy compatibility fallback assigns one use to an owned consumable with no
+saved count. This is prior test-profile history, not a synthetic default grant.
+
+At this checkpoint the full suite has 206 passing tests, and normal startup
+still leaves Daily Login disabled. The live test uses only
+`.build\daily-login-live-20260827`. Never touch authoritative player saves.
+During the last exchange Jake drove RPCS3 and the isolated server was running
+in the local Codex terminal; server and game state must always be re-checked
+in-process before any restart.
+
+## Shipped migration implementation (historical reference)
 
 The v0.3 -> v0.4 migration (all phases of
 `notes/07-v0.4-save-migration-plan.md`) shipped in v0.5.0. Implementation:
@@ -498,6 +593,32 @@ Typical headless form:
   -postScript SomeScript.java
 ```
 
+The v1.06 sale-overlay investigation traced the visual defect
+to Shop method-3 metadata, not the `saleEquip%dT` animation. Boost catalog
+records retain correct active gold/silver prices at `+0x10/+0x14`, but their
+comparison/original gold/silver pair at `+0x6C/+0x68` is zero. `FUN_001E6470` copies the
+ordinary gold/silver fields C/D and optional sale fields E/F/G from each
+method-3 response row into those catalog fields. The emulator currently
+returns rows only for owned requested IDs; the client requests the whole page.
+That omission left unowned comparison prices zero and produced the exact
+crossed-out-zero plus `SALE!` display. See
+`notes/16-v106-daily-login-boost-handoff.md`, "Exact comparison-price writer
+and revised method-3 model", for the static and live evidence. Do not alter
+authoritative saves.
+
+That probe succeeded. Unowned `60003` was returned at its captured 10-gold
+retail price with `sale=false`; exactly that card lost the false `SALE!` banner
+and crossed-out zero. A subsequent full unowned-catalog run fixed every
+unowned card but left the owned cards incorrect. An owned Face Carver (`60020`)
+probe then removed its false sale presentation while retaining its correct
+method-8-restored use count. Production source therefore returns authentic
+ordinary-price metadata for every requested v1.06 Boost ID `60000..60023`,
+owned or unowned; method 8 remains the authority for ownership and remaining
+uses. Final ungated live validation succeeded with both diagnostic probes
+absent: both Boost pages had correct retail prices, no false `SALE!` banners or
+crossed-out zeroes, and all owned quantities—including Face Carver x31—were
+retained. This issue is resolved server-side.
+
 Known RPCS3 installs for two-client work:
 
 ```text
@@ -522,8 +643,8 @@ if ($a -ne $b) { throw 'Distributed patch YAML files differ' }
 powershell -ExecutionPolicy Bypass -File packaging\build_release.ps1
 ```
 
-At this checkpoint the full suite contains 63 tests. The number should grow as
-migration coverage is added; do not hard-code 63 into future acceptance logic.
+At this checkpoint the full suite contains 206 tests. The number will grow as
+coverage is added; do not hard-code a test count into future acceptance logic.
 
 ## Dead ends and corrections not to repeat
 
@@ -546,19 +667,19 @@ migration coverage is added; do not hard-code 63 into future acceptance logic.
 ```text
 Continue work in C:\Users\Jake\Coding\SpartacusLegends-RE.
 
-Read AGENTS.md and CURRENT_HANDOFF.md completely first. Treat README.md and tag
-v0.4.0 as the shipped baseline. Do not start with notes/00-plan.md; it is a
-chronological research archive containing superseded conclusions.
+Read AGENTS.md and CURRENT_HANDOFF.md completely first, then read
+notes/16-v106-daily-login-boost-handoff.md. Treat README.md and tag v0.6.2 as
+the shipped baseline. Do not start with notes/00-plan.md; it is a chronological
+research archive containing superseded conclusions.
 
 Verify the checkpoint with:
   git status --short
   git log -3 --oneline --decorate
   python -m unittest discover -s tests -p 'test_*.py'
 
-The recommended next objective is Phase 1 of
-notes/07-v0.4-save-migration-plan.md. Begin with read-only inspection and a
-concrete implementation plan, then implement the coordinator and unit tests if
-the current user request authorizes changes. Do not enable PINE during normal
-startup, alter player save data, publish releases, or push changes without
-explicit approval.
+The v1.06 Daily Login and consumable-boost work is included in v0.6.2. Daily
+Login remains behind an explicit opt-in flag, Shop method 9 decrements Face
+Carver uses, method 8 restores persisted quantities, and method 3 supplies
+ordinary retail metadata for Boost IDs 60000..60023. Do not alter player save
+data outside an explicitly isolated live test.
 ```

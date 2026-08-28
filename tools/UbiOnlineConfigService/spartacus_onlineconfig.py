@@ -27,8 +27,6 @@ DEFAULT_USER_CONTENT_DIR = Path(os.environ.get(
     "SPARTACUS_USER_CONTENT_DIR",
     Path(__file__).resolve().parents[2] / "data" / "usercontent",
 ))
-
-
 class ServiceLog:
     def __init__(self, path: Path):
         self.path = Path(path)
@@ -82,8 +80,8 @@ def make_remote_config_response() -> bytes:
 
 
 def make_handler(rdv_host: str, rdv_port: int, service_log: ServiceLog,
-                 user_content_dir: Path = DEFAULT_USER_CONTENT_DIR,
-                 upload_gate=None):
+                  user_content_dir: Path = DEFAULT_USER_CONTENT_DIR,
+                  upload_gate=None):
     response_body = make_response(rdv_host, rdv_port)
     remote_config_body = make_remote_config_response()
     user_content_dir = Path(user_content_dir)

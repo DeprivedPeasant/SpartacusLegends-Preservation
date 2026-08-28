@@ -10,6 +10,7 @@ from tools.prudp_server import (
     STORE_REFRESH_SENTINEL,
     V106_CHALLENGE_REWARDS,
     V106_DAILY_CHALLENGE_IDS,
+    V106_DAILY_LOGIN_REWARDS,
     encode_qdatetime,
     encode_purchase_result,
     encode_reward_balances,
@@ -122,6 +123,112 @@ class EconomyStoreTests(unittest.TestCase):
         self.assertEqual(store.data["silver"], 4000)
         self.assertEqual(store.data["fame"], 4000)
 
+    def test_daily_login_grants_at_most_one_stage_per_utc_date(self):
+        store, path = self.make_store({
+            "gold": 0,
+            "silver": 200,
+            "fame": 0,
+            "owned_items": [],
+        })
+        day1 = datetime.date(2026, 8, 27)
+        day2 = datetime.date(2026, 8, 28)
+
+        self.assertTrue(store.register_daily_login(day1))
+        self.assertFalse(store.register_daily_login(day1))
+        self.assertEqual(
+            store.daily_login_rewards(),
+            [V106_DAILY_LOGIN_REWARDS[1][0]],
+        )
+        self.assertTrue(store.register_daily_login(day2))
+        self.assertEqual(
+            [reward[0] for reward in store.daily_login_rewards()],
+            [1, 2],
+        )
+
+        reloaded = EconomyStore(path)
+        self.assertEqual(
+            reloaded.daily_login_rewards(),
+            store.daily_login_rewards(),
+        )
+        self.assertFalse(reloaded.register_daily_login(day2))
+
+    def test_daily_login_info_exposes_stage_and_utc_reset_countdown(self):
+        store, _ = self.make_store({
+            "gold": 0,
+            "silver": 0,
+            "fame": 0,
+            "owned_items": [],
+        })
+        day = datetime.date(2026, 8, 26)
+        self.assertTrue(store.register_daily_login(day))
+
+        schedule, current_stage, reset_seconds = store.daily_login_info(
+            datetime.datetime(
+                2026, 8, 26, 23, 59, 30,
+                tzinfo=datetime.timezone.utc,
+            )
+        )
+
+        self.assertEqual(len(schedule), 7)
+        self.assertEqual(schedule[0], V106_DAILY_LOGIN_REWARDS[1][0])
+        self.assertIn(schedule[1], V106_DAILY_LOGIN_REWARDS[2])
+        self.assertEqual(
+            [reward[0] for reward in schedule], list(range(1, 8))
+        )
+        self.assertEqual(current_stage, 0)
+        self.assertEqual(reset_seconds, 30)
+
+    def test_daily_login_stash_stops_at_seven_retail_stages(self):
+        store, _ = self.make_store({
+            "gold": 0,
+            "silver": 0,
+            "fame": 0,
+            "owned_items": [],
+        })
+        start = datetime.date(2026, 8, 1)
+
+        for offset in range(7):
+            self.assertTrue(store.register_daily_login(
+                start + datetime.timedelta(days=offset)
+            ))
+        self.assertFalse(store.register_daily_login(
+            start + datetime.timedelta(days=7)
+        ))
+        self.assertEqual(
+            [reward[0] for reward in store.daily_login_rewards()],
+            list(range(1, 8)),
+        )
+
+    def test_claim_daily_login_rewards_credits_and_clears_atomically(self):
+        store, path = self.make_store({
+            "gold": 2,
+            "silver": 100,
+            "fame": 5,
+            "owned_items": [],
+        })
+        start = datetime.date(2026, 8, 1)
+        for offset in range(7):
+            store.register_daily_login(start + datetime.timedelta(days=offset))
+
+        rewards = store.claim_daily_login_rewards()
+        self.assertEqual([reward[0] for reward in rewards], list(range(1, 8)))
+        self.assertEqual(store.daily_login_rewards(), [])
+        self.assertEqual(
+            (store.data["gold"], store.data["silver"], store.data["fame"]),
+            (12, 3100, 5),
+        )
+        self.assertIn(rewards[1][1], store.data["owned_items"])
+        self.assertIn(60006, store.data["owned_items"])
+        self.assertIn(120051, store.data["owned_items"])
+        self.assertEqual(store.claim_daily_login_rewards(), [])
+
+        reloaded = EconomyStore(path)
+        self.assertEqual(reloaded.daily_login_rewards(), [])
+        self.assertEqual(
+            (reloaded.data["gold"], reloaded.data["silver"]),
+            (12, 3100),
+        )
+
     def test_reward_balances_are_exactly_three_u32(self):
         body = encode_reward_balances(1, 259, 56)
 
@@ -144,6 +251,61 @@ class EconomyStoreTests(unittest.TestCase):
         })
 
         self.assertEqual(store.slot_entitlements(), [80002, 80007])
+
+    def test_method_8_transactions_replay_complete_purchase_history(self):
+        store, _ = self.make_store({
+            "owned_items": [
+                80002, 10250, 30001, 50002, 60020, 60021, 60022, 120051,
+            ],
+            "item_quantities": {
+                "60020": 17,
+                "60021": 1,
+                "60022": 0,
+            },
+        })
+
+        self.assertEqual(
+            store.method_8_transactions(),
+            [
+                (10250, 1),
+                (30001, 1),
+                (50002, 1),
+                (60020, 17),
+                (60021, 1),
+                (80002, 1),
+                (120051, 1),
+            ],
+        )
+
+    def test_legacy_face_carver_ownership_migrates_to_five_uses(self):
+        store, _ = self.make_store({
+            "owned_items": [60020],
+        })
+
+        self.assertEqual(store.item_quantity(60020), 5)
+        self.assertEqual(store.item_quantity(60021), 0)
+
+    def test_consume_item_decrements_and_persists_remaining_uses(self):
+        store, path = self.make_store({
+            "owned_items": [60020],
+            "item_quantities": {"60020": 4},
+        })
+
+        self.assertEqual(store.consume_item(60020), 3)
+        self.assertEqual(store.item_quantity(60020), 3)
+        persisted = json.loads(path.read_text(encoding="utf-8"))
+        self.assertEqual(persisted["item_quantities"]["60020"], 3)
+
+    def test_face_carver_refill_adds_five_uses_and_debits_again(self):
+        store, _ = self.make_store({
+            "gold": 20,
+            "silver": 0,
+            "owned_items": [60020],
+            "item_quantities": {"60020": 4},
+        })
+
+        self.assertEqual(store.purchase(60020, 10, -1), (10, 0))
+        self.assertEqual(store.item_quantity(60020), 9)
 
     def test_refresh_debits_cost_without_creating_inventory(self):
         store, path = self.make_store({

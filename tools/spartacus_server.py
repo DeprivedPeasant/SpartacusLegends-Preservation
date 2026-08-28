@@ -174,6 +174,9 @@ def parse_args(argv=None):
                              "the native save-object size table and the "
                              "matching required client patch. Defaults to "
                              "the version recorded by the patch installer")
+    parser.add_argument("--daily-login-rewards", action="store_true",
+                        help="enable the experimental 01.06 seven-stage "
+                             "daily-login reward service")
     parser.add_argument("--check", action="store_true",
                         help="check ports and configuration, then exit")
     parser.add_argument("--recover-legends", type=Path, metavar="RPCS3_FOLDER",
@@ -483,6 +486,8 @@ def main() -> int:
     configure_environment(
         log_dir, args.secure_port, advertise_host, args.title_version
     )
+    if args.daily_login_rewards:
+        os.environ["SPARTACUS_DAILY_LOGIN_REWARDS"] = "1"
 
     # The remote-config metadata row carries the expected digest of the exact
     # body served by the HTTP component. Derive it from the same response
@@ -496,6 +501,8 @@ def main() -> int:
 
     print(f"Spartacus Legends Preservation Server v{VERSION}")
     print(f"Game version: {args.title_version} ({version_source})")
+    if args.daily_login_rewards:
+        print("Daily login rewards: experimental live test enabled")
     print(f"Logs: {log_dir}")
     if running_from_temp(base_dir):
         print("\nWARNING: this server is running from a temporary folder:")
