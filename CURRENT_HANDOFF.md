@@ -22,14 +22,14 @@ Version `0.6.2` is publicly released. It retains live-tested title versions
 `01.00` and `01.06`, adds v1.06 Daily Login and Shop quantity/metadata
 fidelity, and includes the live-validated cold-boot Boost persistence fix:
 
-- Release commit: `8da2f193f62fc34ce6aa90a90053fa1cd8910ffe`
+- Release commit: `707bbb29511a846e2ca1d93f5fac771515801efb`
 - Annotated tag: `v0.6.2`
 - Required patch versions: `4.2` for 01.00 and `4.4` for 01.06
 - Release:
   `https://github.com/DeprivedPeasant/SpartacusLegends-Preservation/releases/tag/v0.6.2`
 - Release ZIP SHA-256:
-  `f75d6d26b7650f6bb723dedd61b136a17354edb8dbbfdc143d8edd631ef9975d`
-- Release ZIP: 16,654,725 bytes.
+  `8c9a08fb2877d366829518998a3426a6307ef9bfaba8daaa9cbf197033ef71b5`
+- Release ZIP: 16,671,428 bytes.
 - Final tagged validation: 206 tests passed; a fresh extraction exercised both
   packaged executables, alternate-port checks, full packaged server startup,
   expected release contents, and the v1.06 CLI configuration.
