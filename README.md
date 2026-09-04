@@ -1,5 +1,8 @@
 # Spartacus Legends preservation server
 
+Join the discord to keep up to date, ask for help and submit bug reports!
+https://discord.gg/TgJ6n9qDHG
+
 This project restores the login/bootstrap path for the PS3 version of
 Spartacus Legends using a local OnlineConfig and Quazal RendezVous server.
 Once bootstrap completes, the preserved single-player game runs locally. The
