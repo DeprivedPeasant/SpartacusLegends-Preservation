@@ -1,4 +1,59 @@
-# Current AI handoff — v0.6.4 release-candidate checkpoint
+# Current AI handoff — v0.6.5 release checkpoint
+
+## 2026-09-05 boost refill fix (packaged live validation passed; released as v0.6.5)
+
+**Live validation passed:** isolated test at
+`.build/boost-refill-live-20260905-181627` used the corrected packaged server
+(SHA256 `BE6BA9DFFDBE0DC1A8766D1545C673CEC6FF94531F433298770330D931F29336`).
+Jake bought two Fame Boost packs: UI 10 uses, two 20-gold debits. One fight
+sent one method-9 call for 60006 and saved 9 uses; Jake confirmed UI x9.
+Exact-size native profile/campaign/roster uploads followed. The game sent
+DISCONNECT at 18:25:31, then the server stopped cleanly. The launcher remained
+open with the game stopped. Server restarted at 18:26:17; second boot replayed
+`(60006, 9)` at 18:27:36 and served all three native objects. Jake confirmed
+9 uses after the cold boot. Purchase/consume/persist/restore is live proven.
+
+The validation server was stopped cleanly after the second boot. Original dist
+installation/data was unchanged; the test folder contains matched pre-test
+backups and boot-1 saved hashes. The original v0.6.4 ZIP is backed up there.
+The 0.6.5 release artifact was built with `packaging/build_release.ps1` and
+checked with both packaged `--help` commands. ZIP SHA-256 is
+`3C1F623F4CDCBC686F8A38F64AB273374E8F1F6922BEDEAAD80C27054AA43073`;
+server executable SHA-256 is
+`0F248E225C31276AA576CA709286E5E6C63147EB4808F6EF63FC440B9BEFAC02`;
+installer executable SHA-256 is
+`4A557DEF937FE759D1EB616EDCDE4B52C32DA0FF87A965A7B07A5803C34271F1`.
+
+Jake reported Fame Boost x6 becoming x0 after a fight. The running packaged
+v0.6.4 log at `dist/SpartacusLegends-Preservation-v0.6.4/logs/prudp.log`
+proves method 8 restored item 60006 at quantity 1 at 18:04:49; method 7
+accepted a refill at 18:06:07 but left its saved count/balance unchanged;
+one method-9 request at 18:06:12 returned remaining=0. A subsequent refill
+at 18:09:16 likewise left the saved zero unchanged. This is a refill-accounting
+bug, not six consumption requests. Only Face Carver had a known pack mapping,
+so other owned boosts were treated as permanent, non-repeatable purchases.
+
+Retail 01.06 `SP_Skills.psf` (24 records, stride 0x70) has five at +0x1C
+for every purchasable row 1..23. Native purchase code at 0x0019E3F4/404
+resolves the boost catalog record; 0x0019E410 preserves it in r31 and
+0x0019E614..628 adds record+0x1C to the existing count via 0x00259980.
+The source pack mapping now covers 60001..60023 at five uses. This corrects
+new purchases, refills, and the existing daily-login pack conversion. Legacy
+missing-count defaults are separated and unchanged; explicit counts, including
+zero, remain authoritative. Past lost uses cannot be recovered automatically.
+
+Regression coverage exercises all 23 boosts: refill 1->6, consume 6->5,
+restart/method-8 restoration, depletion and repurchase; first purchase,
+99-use cap, and legacy-count preservation also pass. Full suite: 240 tests;
+module compilation and diff checks pass. Earlier daily-login investigation
+added two tests proving seven-stage growth across restarts and day-1 reset
+after daily cash-in; the reporting user's choice remains unconfirmed.
+
+No running executable, player save, or server session was changed. The open
+packaged server still contains the bug. Build/deploy a candidate only after
+the active game/server can be closed safely; validate Fame Boost purchase,
+one-fight decrement, and cold-boot restoration before release. No commit or
+release operation was authorized or performed.
 
 - **Checkpoint:** 2026-08-28
 - **Repository:** `C:\Users\Jake\Coding\SpartacusLegends-RE`
@@ -716,7 +771,162 @@ C:\Users\Jake\Desktop\Clean RPCS3\rpcs3-B\rpcs3.exe
 The native-persistence live work used RPCS3 `0.0.42-19803`. Do not reuse the
 obsolete RPCS3/Ghidra paths at the beginning of `notes/00-plan.md`.
 
+## Unreleased v1.06 Shroud perk experiment (2026-08-29)
+
+The actual weighted random perk selector is `0x00260F28`; the earlier
+`0x001BF848` / `0x00257C2C` hypothesis was an ancillary resolver and is
+superseded. Retail v1.06 gives every ordinary enabled perk weight 100 in each
+of seven selector columns, while Shroud of the Fallen I–III (runtime ids
+78–80) have zero in all seven. Setting only Shroud I to a very high diagnostic
+weight made it appear after a fight. Jake accepted and replaced a perk with
+it, then cold-booted and confirmed it remained attached, validating UI,
+effects, commit, and native persistence.
+
+**Update 2026-08-30:** the trilogy (records 78–80 at weight 100) is confirmed
+acquirable by users testing. The seven weight columns are selector categories
+0..6 (identity mapping through jump-table getter `0x00260CA0`; the category
+is `*(game-context singleton+0x2C)` via `0x000B8F1C`, written only by
+`0x000B9F5C`). Records 68–77 are fully authored ordinary perks disabled only
+by their zero weights: trigger tags `Taunt`/`Roll`/`GrabBlock`, correct
+durations and magnitudes, complete six-language descriptions. Seven of the
+ten have real display names (BRAVADO, COCKY, TANK, PATCH UP, BARREL ROLL,
+NIMBLE, RUTHLESS COUNTER); records 68/69/70 (`Perk99/100/101_Name`) have
+zero-length name strings in `strings.dat` and would display blank. A
+named7+trilogy candidate
+(`SP_Perks.named7-plus-trilogy-weight100.psf`, SHA-256
+`E87F8F7B47446E370702B3CA536818EA3838573A542BD9C5BB7F5379E0017E4E`,
+70 weight bytes changed vs retail) is installed in `rpcs3-B` for the next
+live run; an all-13 variant (`910DA6B4A5E2F7D35963DEBFB7DFFA7E48E685BF4552446BDA8E7C7BC38AB1FB`)
+exists but is not installed. Evidence and candidate table:
+`notes/16-v106-perk-grant-and-shroud.md` §10. The retail reference table and
+its dump tool are `tools/dump_perk_table_v106.py` and
+`tools/build_perk_enable_v106.py`. No production patch, commit, or release
+includes this yet.
+
+The superseded trilogy-only candidate (`086803BB...`, ids 78–80 only) remains
+available at `.build/shroud-trilogy-experiment-20260829/`. The pristine retail
+SHA-256 is
+`F66B2319310BC3AD4E344B49D81AEBB50864397C7B9DB97174AA032F1DBA49EA`.
+See `notes/16-v106-perk-grant-and-shroud.md` §9–§10.
+
 ## Verification and build commands
+
+### Optional Mark of Achilles I prototype (2026-08-31; not live tested)
+
+**Latest: combined Achilles + Agron I-III private normal-drop pack built.**
+Jake selected ALL Agron effects gated by low health, then explicitly requested
+adding the family for two private testers. Earlier mixed-condition blocker
+is superseded; no YAML patch needed for this interpretation.
+`outputs/achilles-agron-normal-drop-20260831/` contains the combined ZIP/pair,
+guide/manifest/checksums. Existing IDs0-83 byte-identical to Achilles trilogy;
+Agron IDs84-86 clone Fury's <=20% gate and lifecycle, remove its attack-speed
+bonus, set damage10/15/20% at BOTH +94/+10C, resistance5/10/15% at+B0/+B4,
+IgnorePain +C0=1/+C4=INTEGER5, ratings20/30/40, seven weights100.
+Fury icon placeholder; English text; normal reward gates unchanged. Builder
+`tools/build_achilles_trilogy_v106.py --include-agron`; guide
+`notes/20-achilles-agron-private-candidate.md`. Agron live behavior including
+healing-above-threshold deactivation is untested and disclosed. No installed
+files, saves, server sessions, production patches, or releases changed.
+ZIP SHA256 `0d3ff9c0e3eeb934b14a7b848d2db6b4addd73432a849795abeca43258007d50`.
+Old Achilles-only artifact retained as a checkpoint; send the COMBINED ZIP now.
+
+**Newest: full Achilles I-III normal-drop candidate built, NOT installed.**
+`outputs/achilles-trilogy-normal-drop-20260831/` contains the shareable ZIP,
+checksums, manifest, tester guide, and XML pair. Builder:
+`tools/build_achilles_trilogy_v106.py`; guide: `notes/18-achilles-trilogy-candidate.md`.
+IDs81/82/83, weight100 in all7categories, shield icon, HP5/10/15,
+resistance5/10/15%, regen0.25/0.5/1%sec, rating20/35/50. Base remains
+named7+Shroud; first81records unchanged, ID81 byte-identical to revision2
+normal-drop. Independent Node verification preserves45952old localization
+cells and all21tables; six new rows. Full suite232passed. ZIP SHA256:
+`10a7020147770616ac7861acb8615b03cc50ca1699b141a009f991a4ee3317af`.
+II/III, normal acquisition, and shield presentation still require live tests.
+No install/save/server/production patch/Git release change this turn.
+
+Jake also requested Agron's Rage. It is NOT included: native per-perk activation
+gates every combat effect together; cannot currently represent independently
+conditional damage with unconditional resistance/Ignore Pain in one XML row.
+Asked whether a separate optional YAML patch is acceptable; await answer.
+See `notes/19-agron-reconstruction-blocker.md`, full decompiler evidence in
+`.build/agron-condition-analysis.log`. IgnorePain +0xC4 is INTEGER15, not a
+float; +0x10C is generic damage, not a special low-health field. Do not silently
+ship an approximation. Exact Agron historical threshold remains unknown.
+
+**Newest:** Jake reports gameplay working and supplies historical footage of
+Achilles II using the same shield icon as Ignore Pain. Exact retail row24
+reference is Textures/Spartacus/Icons/PRK_DefenseAction_gold.png. Rebuilt BOTH
+variants in `.build/achilles-prototype-20260831-r2-shield/`; independent binary
+diff confirms only new ID81's +0x0C icon word changes vs corresponding revision1,
+strings.dat byte-identical, effects/IDs untouched; 12 focused tests pass.
+Revision2 is NOT installed. Next install normal-drop revision2 with RPCS3 closed,
+then confirm retained perk and shield icon. Original revision1 installed files
+remain for now. User's working-gameplay report is not a precise numeric hit test.
+
+**Latest live evidence 12:19:58:** interpreter breakpoint0x0009A0AC, r4
+0x35755F10 confirmed Frideric/key3192. Achilles ID81 is active (state1).
+Actual cached combat aggregate reads12% in both resistance channels and
+0.5% regen/s: Fearless Fists7%/0.25% plus Achilles5%/0.25%. Evidence
+`.build/achilles-live-20260831-115406/runtime-1788142798958.json` (68 read-only
+serial reads). Activation/aggregate stacking now verified. Direct hit/healing
+measurements and normal-drop variant test remain outstanding. Server30538
+unchanged; RPCS3 currently stopped at breakpoint pending user's resume.
+
+**Cold boot 2 confirmed by Jake:** Achilles remains attached, Frideric118 HP /
+277 Rating. New-ID acquisition, native upload, and cold-boot readback passed.
+Combined resistance/regeneration effects remain unverified, and normal-drop
+variant has not yet been installed. Current server session30538 remains active.
+
+**Latest 12:04 update:** acquisition/UI and native upload of new ID81 succeeded.
+See `.build/achilles-live-20260831-115406/boot2-status.md`. Frideric key3192
+replaced Warrior's Insurance (51), not an unknown perk. Awaiting first cold-boot
+readback; combat effects still unverified. One-hit now disabled, title EBOOT PPU
+cache moved to recoverable backup. Server cleanly restarted, new PTY30538
+(old70432 closed). Extra after-acquisition save checkpoint retained.
+
+**Live-test preparation authorized and completed 2026-08-31 11:54:**
+`.build/achilles-live-20260831-115406/live-test.json` records 37 verified
+copies. Its `backup/` holds the complete last perk-test server data, local
+`rpcs3-B` NPUB30746-STYAUTO- save, original two XML files, and patch/network
+configs. `test-high-drop` SP_Perks.psf and strings.dat are now installed in
+`rpcs3-B` and hash-verified. The original server data was NOT changed; the
+test runs a separate copy under that live folder's `server/data`. Packaged
+v0.6.4 is running on loopback ports 80/21000/21001, all services ready, game
+01.06, native persistence; exec PTY session 70432 (Ctrl+C only after RPCS3
+closes). The one-hit optional patch remains enabled for acquisition; disable
+it with RPCS3 closed before combat-effect validation. Awaiting first boot and
+perk offer. Do not start the older server against the experimental local save.
+For rollback use this matched backup, not an earlier research checkpoint.
+
+Jake authorized an optional reconstruction prototype, not a production release
+or installation. `tools/build_achilles_prototype_v106.py` appends runtime perk
+ID 81 to the existing 81 rows and adds two unique localized rows to strings.dat.
+The candidate uses Shroud I's +5 HP/20 rating, removes its defense/damage bonuses,
+and copies Hardened Flesh's two 0.05 resistance channels and Apollo's 0.0025
+regeneration field. Existing Shroud icon, English text for all languages.
+
+Built from the installed named7+trilogy PSF and pristine retail localization:
+`.build/achilles-prototype-20260831/` contains `test-high-drop` (weight 1,000,000)
+and `normal-drop` (weight 100), each with SP_Perks.psf and strings.dat, plus
+README and manifest. No install, save, server, code patch, or Git release was
+modified. New ID persistence and combined combat effects remain UNTESTED.
+Do not distribute as validated. Test using a disposable/backed-up save; rollback
+must restore pre-test saves as well as XML files if ID 81 was acquired.
+
+Twelve new synthetic tests passed; full suite 226 tests passed. Independent
+Node verification retained all 81 original records, all 45,952 existing
+localization cells across 21 tables, and byte-identical unrelated tables.
+See `notes/17-achilles-prototype.md` for installation, rollback, live checklist,
+field provenance, and precise static evidence. Builder/test/note are local
+research files covered by existing ignore rules, not a committed feature.
+
+Important corrections to older perk notes: actual PSF record base is 0x24,
+not 0x10; the old tool's field-offset shift happened to cancel for most fields.
+True +0xA8/+0xAC are additive health/defense, NOT delete costs. Native parser
+0x261354 uses count/stride and treats string offset zero as VALID; only -1
+is null. Original strings.dat also contains conflicting duplicate Perk99/100/101
+name keys: empty early rows and nonempty later INTIMIDATION/SWAGGER/SWOLLEN HEAD
+rows. Earlier claims that those names are definitely absent are superseded;
+runtime duplicate-key precedence remains unverified.
 
 ```powershell
 python -m unittest discover -s tests -p 'test_*.py'
@@ -748,6 +958,44 @@ coverage is added; do not hard-code a test count into future acceptance logic.
 - Do not assume successful transport ACK/PING means an RMC session survived a
   server restart.
 - Do not treat `notes/00-plan.md` NEXT labels as current assignments.
+
+## 2026-09-01 v1.06 weapon GUI / lost live-service item finding
+
+The final v1.06 weapon GUI can be extracted losslessly. `FrontEndGlobal.gbs`
+contains fixed records with logical sprite path, pixel dimensions, internal
+atlas ID, and UV rectangle. Atlas IDs 1000..1007 map to the eight
+`GUI/Textures/TA_1012_1.dds` .. `TA_1012_8.dds` pages. Local research tool
+`tools/extract_weapon_gui_v106.mjs` generated
+`outputs/weapon-gui-v106-20260901/`: 94 unique PNG weapon sprites,
+371/377 weapon-table rows mapped, original DDS pages, CSV and JSON manifests.
+The tool/output are ignored research artifacts, not shipped release content.
+
+Historical screenshots in `C:\Users\Jake\Downloads\Compressed\ITEMS` establish
+high-confidence reuse: Spear of Minerva matches `uiMarket_SP_Spear_T3_00.png`
+and Spear of Apollo matches `uiMarket_SP_Spear_T1_00.png`. Corresponding
+`SP_Spear_T3_00.PSSG` and `SP_Spear_T1_00.PSSG` models already exist in the base
+HDDCache.pak. Exact lost-item names are absent from final v1.06 equipment tables
+and strings.dat, and archive filenames contain no unique Minerva/Apollo spear.
+Current hypothesis: historical live tables added definitions which reused
+shipped generic assets; reconstruct rows rather than inventing models/textures.
+See `outputs/weapon-gui-v106-20260901/INVESTIGATION.md` locally.
+
+**Spear of Minerva candidate built (not installed):** Player evidence in
+`C:\Users\Jake\Downloads\Compressed\ITEMS\STATS INFO.txt` plus the historical
+screenshot establishes +4 Health, +8 Defense, +28% Damage, rating 81,
+Excellent parrying, +50% critical chance, +15% damage resistance, and +6%
+weapon speed. `outputs/spear-of-minerva-v106-candidate-20260901/` contains an
+append-only private candidate with new item ID 10387, its manifest/readme, and
+shareable ZIP. It combines the screenshot-matched `SP_Spear_T3_00` model/card
+with an Excellent spear behavior record. All 387 retail weapon records are
+byte-identical. Candidate PSF SHA-256:
+`8EA8D700A2F90584C6E26A8C01917F3B33E158B3A986FC46235CD461E017C9CC`.
+ZIP SHA-256:
+`8F1D49FF9F6FF4404BC2E04E9BE4F0DD704802C0BBCE86D99A22C1B33AC96916`.
+Original ID/description/price/acquisition metadata remain unrecovered; health
+and defense encoding must be checked live. Builder:
+`tools/build_spear_minerva_v106.py`. Do not install or grant ID 10387 without a
+matched XML + save/server-data backup; rollback must restore both.
 
 ## Paste-ready new-session prompt
 

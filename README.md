@@ -312,6 +312,17 @@ game's PPU cache, and cold-boot. Normal RPCN accounts are used; do not share
 credentials. If a match fails, report which client hosted, the queue type, and
 both RPCS3 logs.
 
+## v0.6.5 release notes
+
+This patch release fixes v1.06 consumable boost refills. Every purchasable
+boost pack now restores five uses, matching the retail catalog. Uses are
+decremented one at a time after fights and persist across cold boots. The fix
+was live-validated with Fame Boost: two packs restored 10 uses, one fight left
+9, and a cold boot restored 9.
+
+Close RPCS3 before replacing the server files, keep the existing `data`
+directory, and extract the release ZIP into a permanent folder.
+
 ## v0.6.4 release notes
 
 This hotfix completes the oversized Shop method-8 transport correction begun

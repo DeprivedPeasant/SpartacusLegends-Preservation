@@ -279,9 +279,13 @@ V106_CONSUMABLE_RETAIL_PRICES = {
     60020: (1, 500), 60021: (3, 0),
     60022: (1, 500), 60023: (3, 0),
 }
-# Retail Face Carver grants one five-use stack. Other consumable stack sizes
-# remain unknown and retain the legacy one-unit fallback until verified.
-CONSUMABLE_STACK_USES = {60020: 5}
+# Retail SP_Skills.psf records 1..23 all carry five uses at +0x1C.
+# The 01.06 purchase handler at 0x0019E614 adds that field to the count.
+# Record zero is the empty-slot placeholder, not a purchasable boost.
+CONSUMABLE_STACK_USES = dict.fromkeys(range(60001, 60024), 5)
+# Preserve the historical fallback for saves with no explicit use count.
+# Their actual remaining uses cannot be reconstructed from ownership alone.
+LEGACY_CONSUMABLE_USES = {60020: 5}
 PROTO_NAMES = {0x0A: "TicketGranting", 0x0B: "SecureConnection",
                0x0E: "GlobalNotificationEvent", 102: "Monetization",
                105: "Tournament", 106: "PatchVersion",
@@ -490,7 +494,7 @@ class EconomyStore:
             if item_id not in set(self.data["owned_items"]):
                 return 0
             return self.data["item_quantities"].get(
-                item_id, CONSUMABLE_STACK_USES.get(item_id, 1)
+                item_id, LEGACY_CONSUMABLE_USES.get(item_id, 1)
             )
 
     def consume_item(self, item_id):

@@ -152,6 +152,38 @@ class EconomyStoreTests(unittest.TestCase):
         )
         self.assertFalse(reloaded.register_daily_login(day2))
 
+    def test_daily_login_grows_across_daily_server_restarts(self):
+        store, path = self.make_store({})
+        start = datetime.date(2026, 9, 1)
+        schedule = None
+        for offset in range(7):
+            store = EconomyStore(path)
+            day = start + datetime.timedelta(days=offset)
+            self.assertTrue(store.register_daily_login(day))
+            current_schedule, stage, _ = store.daily_login_info()
+            if schedule is None:
+                schedule = current_schedule
+            self.assertEqual(current_schedule, schedule)
+            self.assertEqual(stage, offset)
+            self.assertEqual(store.daily_login_rewards(), schedule[:offset + 1])
+            reloaded = EconomyStore(path)
+            self.assertFalse(reloaded.register_daily_login(day))
+            self.assertEqual(reloaded.daily_login_rewards(), schedule[:offset + 1])
+
+    def test_daily_login_cash_in_each_day_restarts_at_day_one(self):
+        store, path = self.make_store({})
+        start = datetime.date(2026, 9, 1)
+        for offset in range(3):
+            store = EconomyStore(path)
+            day = start + datetime.timedelta(days=offset)
+            self.assertTrue(store.register_daily_login(day))
+            self.assertEqual(store.claim_daily_login_rewards(),
+                             [V106_DAILY_LOGIN_REWARDS[1][0]])
+            reloaded = EconomyStore(path)
+            self.assertFalse(reloaded.register_daily_login(day))
+            self.assertEqual(reloaded.daily_login_rewards(), [])
+            self.assertEqual(reloaded.data["daily_login"]["schedule"], [])
+
     def test_daily_login_info_exposes_stage_and_utc_reset_countdown(self):
         store, _ = self.make_store({
             "gold": 0,
@@ -306,6 +338,42 @@ class EconomyStoreTests(unittest.TestCase):
 
         self.assertEqual(store.purchase(60020, 10, -1), (10, 0))
         self.assertEqual(store.item_quantity(60020), 9)
+
+    def test_all_retail_boost_refills_survive_consumption_and_restart(self):
+        for item_id in range(60001, 60024):
+            with self.subTest(item_id=item_id):
+                store, path = self.make_store({
+                    "gold": 100, "owned_items": [item_id],
+                    "item_quantities": {str(item_id): 1},
+                })
+                self.assertEqual(store.purchase(item_id, 20, -1)[0], 80)
+                self.assertEqual(store.item_quantity(item_id), 6)
+                self.assertEqual(store.consume_item(item_id), 5)
+                store = EconomyStore(path)
+                self.assertEqual(store.item_quantity(item_id), 5)
+                self.assertIn((item_id, 5), store.method_8_transactions())
+                for remaining in range(4, -1, -1):
+                    self.assertEqual(store.consume_item(item_id), remaining)
+                self.assertEqual(store.consume_item(item_id), 0)
+                self.assertEqual(store.purchase(item_id, 20, -1)[0], 60)
+                self.assertEqual(EconomyStore(path).item_quantity(item_id), 5)
+
+    def test_new_boost_purchase_grants_five_and_refill_caps_at_99(self):
+        store, path = self.make_store({"gold": 100})
+        store.purchase(60006, 20, -1)
+        self.assertEqual(EconomyStore(path).item_quantity(60006), 5)
+        store.data["item_quantities"][60006] = 98
+        store.purchase(60006, 20, -1)
+        self.assertEqual(EconomyStore(path).item_quantity(60006), 99)
+
+    def test_boost_fix_preserves_legacy_and_explicit_zero_counts(self):
+        store, _ = self.make_store({
+            "owned_items": [60005, 60006, 60020],
+            "item_quantities": {"60006": 0},
+        })
+        self.assertEqual(store.item_quantity(60005), 1)
+        self.assertEqual(store.item_quantity(60006), 0)
+        self.assertEqual(store.item_quantity(60020), 5)
 
     def test_refresh_debits_cost_without_creating_inventory(self):
         store, path = self.make_store({
