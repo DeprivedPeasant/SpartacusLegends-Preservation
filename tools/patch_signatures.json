@@ -1,0 +1,1476 @@
+{
+  "builds": {
+    "01.00": {
+      "author": "Spartacus Legends preservation project",
+      "games": [
+        [
+          "Spartacus Legends",
+          [
+            "01.00"
+          ]
+        ]
+      ],
+      "name": "Spartacus Legends - Server emulator compatibility",
+      "notes": "REQUIRED. Use with the local preservation server. Works around RPCS3's incomplete Commerce2 product-info result so the original backend state machine reaches state 26 and emits the readiness edge that starts native server-save enumeration, then restores the complete locally serialized profile when the retired retail profile service is unavailable. Also finalizes the server-backed recruitment-pool refresh callback, which otherwise retries indefinitely after a post-fight refresh.",
+      "patch_version": "4.2",
+      "sites": [
+        {
+          "address": 5188452,
+          "label": "enter the game's state-26 success path",
+          "original": 1084097624,
+          "replacement": 1207960664,
+          "target": {
+            "instructions": [
+              {
+                "mask": 4294901760,
+                "relative": -14,
+                "word": 1610612736
+              },
+              {
+                "mask": 4227858435,
+                "relative": -13,
+                "word": 1275066884
+              },
+              {
+                "mask": 4294901760,
+                "relative": -12,
+                "word": 2153909772
+              },
+              {
+                "mask": 4227858435,
+                "relative": -11,
+                "word": 1272265009
+              },
+              {
+                "mask": 4294901760,
+                "relative": -10,
+                "word": 1610612736
+              },
+              {
+                "mask": 4294901760,
+                "relative": -9,
+                "word": 939524123
+              },
+              {
+                "mask": 4294901760,
+                "relative": -8,
+                "word": 2417950720
+              },
+              {
+                "mask": 4227858435,
+                "relative": -7,
+                "word": 1275066860
+              },
+              {
+                "mask": 4294901760,
+                "relative": -6,
+                "word": 2153909792
+              },
+              {
+                "mask": 4227858435,
+                "relative": -5,
+                "word": 1272264985
+              },
+              {
+                "mask": 4294901760,
+                "relative": -4,
+                "word": 1610612736
+              },
+              {
+                "mask": 4294901760,
+                "relative": -3,
+                "word": 939524123
+              },
+              {
+                "mask": 4294901760,
+                "relative": -2,
+                "word": 2417950720
+              },
+              {
+                "mask": 4227858435,
+                "relative": -1,
+                "word": 1275066836
+              },
+              {
+                "mask": 4294901760,
+                "relative": 0,
+                "word": 2166492660
+              },
+              {
+                "mask": 4294901760,
+                "relative": 1,
+                "word": 2148078060
+              }
+            ],
+            "site_index": 14
+          },
+          "window": {
+            "instructions": [
+              {
+                "mask": 4294967295,
+                "relative": -11,
+                "word": 3221946368
+              },
+              {
+                "mask": 4294967295,
+                "relative": -10,
+                "word": 3249078272
+              },
+              {
+                "mask": 4294967295,
+                "relative": -9,
+                "word": 3959449640
+              },
+              {
+                "mask": 4294967295,
+                "relative": -8,
+                "word": 4286603264
+              },
+              {
+                "mask": 4294967295,
+                "relative": -7,
+                "word": 3490381824
+              },
+              {
+                "mask": 4294901763,
+                "relative": -6,
+                "word": 1100744228
+              },
+              {
+                "mask": 4294901760,
+                "relative": -5,
+                "word": 2153909744
+              },
+              {
+                "mask": 4227858435,
+                "relative": -4,
+                "word": 1270940509
+              },
+              {
+                "mask": 4294901760,
+                "relative": -3,
+                "word": 1610612736
+              },
+              {
+                "mask": 4294967295,
+                "relative": -2,
+                "word": 1415775806
+              },
+              {
+                "mask": 4294967295,
+                "relative": -1,
+                "word": 797114368
+              },
+              {
+                "mask": 4294901763,
+                "relative": 0,
+                "word": 1084097624
+              },
+              {
+                "mask": 4294901760,
+                "relative": 1,
+                "word": 2166492660
+              },
+              {
+                "mask": 4294901760,
+                "relative": 2,
+                "word": 2148078060
+              },
+              {
+                "mask": 4294967295,
+                "relative": 3,
+                "word": 796917766
+              },
+              {
+                "mask": 4294901763,
+                "relative": 4,
+                "word": 1084161560
+              }
+            ],
+            "site_index": 11
+          }
+        },
+        {
+          "address": 1070864,
+          "label": "supply Commerce readiness to the native save enumerator",
+          "original": 2283667548,
+          "replacement": 939524097,
+          "target": null,
+          "window": {
+            "instructions": [
+              {
+                "mask": 4294967295,
+                "relative": -14,
+                "word": 796917760
+              },
+              {
+                "mask": 4294901763,
+                "relative": -13,
+                "word": 1084096772
+              },
+              {
+                "mask": 4294901760,
+                "relative": -12,
+                "word": 2283667536
+              },
+              {
+                "mask": 4294967295,
+                "relative": -11,
+                "word": 796917760
+              },
+              {
+                "mask": 4294901763,
+                "relative": -10,
+                "word": 1084096636
+              },
+              {
+                "mask": 4294967295,
+                "relative": -9,
+                "word": 2139349880
+              },
+              {
+                "mask": 4227858435,
+                "relative": -8,
+                "word": 1275059993
+              },
+              {
+                "mask": 4294967295,
+                "relative": -7,
+                "word": 2139349880
+              },
+              {
+                "mask": 4227858435,
+                "relative": -6,
+                "word": 1275061689
+              },
+              {
+                "mask": 4294967295,
+                "relative": -5,
+                "word": 2139349880
+              },
+              {
+                "mask": 4227858435,
+                "relative": -4,
+                "word": 1207968569
+              },
+              {
+                "mask": 4294901760,
+                "relative": -3,
+                "word": 1610612736
+              },
+              {
+                "mask": 4294967295,
+                "relative": -2,
+                "word": 2139349880
+              },
+              {
+                "mask": 4227858435,
+                "relative": -1,
+                "word": 1275064441
+              },
+              {
+                "mask": 4294901760,
+                "relative": 0,
+                "word": 2283667548
+              },
+              {
+                "mask": 4294967295,
+                "relative": 1,
+                "word": 796917760
+              }
+            ],
+            "site_index": 14
+          }
+        },
+        {
+          "address": 427268,
+          "label": "apply the locally saved profile",
+          "original": 1084096700,
+          "replacement": 1207959740,
+          "target": {
+            "instructions": [
+              {
+                "mask": 4294901763,
+                "relative": -14,
+                "word": 1084161996
+              },
+              {
+                "mask": 4227858435,
+                "relative": -13,
+                "word": 1209471837
+              },
+              {
+                "mask": 4294901760,
+                "relative": -12,
+                "word": 1610612736
+              },
+              {
+                "mask": 4294967295,
+                "relative": -11,
+                "word": 2140993536
+              },
+              {
+                "mask": 4294901763,
+                "relative": -10,
+                "word": 1084161988
+              },
+              {
+                "mask": 4294901763,
+                "relative": -9,
+                "word": 3892379808
+              },
+              {
+                "mask": 4294901760,
+                "relative": -8,
+                "word": 945815552
+              },
+              {
+                "mask": 4294901763,
+                "relative": -7,
+                "word": 3951100016
+              },
+              {
+                "mask": 4294901763,
+                "relative": -6,
+                "word": 3953197176
+              },
+              {
+                "mask": 4294967295,
+                "relative": -5,
+                "word": 2080900006
+              },
+              {
+                "mask": 4294901763,
+                "relative": -4,
+                "word": 3955294336
+              },
+              {
+                "mask": 4294901763,
+                "relative": -3,
+                "word": 3957391496
+              },
+              {
+                "mask": 4294901760,
+                "relative": -2,
+                "word": 941686928
+              },
+              {
+                "mask": 4294967295,
+                "relative": -1,
+                "word": 1317011488
+              },
+              {
+                "mask": 4294901760,
+                "relative": 0,
+                "word": 2210568248
+              },
+              {
+                "mask": 4294967295,
+                "relative": 1,
+                "word": 2145647480
+              }
+            ],
+            "site_index": 14
+          },
+          "window": {
+            "instructions": [
+              {
+                "mask": 4294967295,
+                "relative": -14,
+                "word": 798949397
+              },
+              {
+                "mask": 4294901760,
+                "relative": -13,
+                "word": 1006567425
+              },
+              {
+                "mask": 4294901763,
+                "relative": -12,
+                "word": 1084162016
+              },
+              {
+                "mask": 4294901760,
+                "relative": -11,
+                "word": 1016987649
+              },
+              {
+                "mask": 4294901760,
+                "relative": -10,
+                "word": 2212665396
+              },
+              {
+                "mask": 4294901760,
+                "relative": -9,
+                "word": 948219100
+              },
+              {
+                "mask": 4294967295,
+                "relative": -8,
+                "word": 2145647480
+              },
+              {
+                "mask": 4294967295,
+                "relative": -7,
+                "word": 2021916704
+              },
+              {
+                "mask": 4227858435,
+                "relative": -6,
+                "word": 1209500617
+              },
+              {
+                "mask": 4294901760,
+                "relative": -5,
+                "word": 1610612736
+              },
+              {
+                "mask": 4227858435,
+                "relative": -4,
+                "word": 1275068205
+              },
+              {
+                "mask": 4227858435,
+                "relative": -3,
+                "word": 1275066901
+              },
+              {
+                "mask": 4294967295,
+                "relative": -2,
+                "word": 1415775806
+              },
+              {
+                "mask": 4294967295,
+                "relative": -1,
+                "word": 797114368
+              },
+              {
+                "mask": 4294901763,
+                "relative": 0,
+                "word": 1084096700
+              },
+              {
+                "mask": 4294901760,
+                "relative": 1,
+                "word": 2210568248
+              }
+            ],
+            "site_index": 14
+          }
+        },
+        {
+          "address": 1526428,
+          "label": "accept recruit-pool refresh completion",
+          "original": 2557018146,
+          "replacement": 2550726690,
+          "target": null,
+          "window": {
+            "instructions": [
+              {
+                "mask": 4294967295,
+                "relative": -14,
+                "word": 2032336928
+              },
+              {
+                "mask": 4227858435,
+                "relative": -13,
+                "word": 1275068108
+              },
+              {
+                "mask": 4294901760,
+                "relative": -12,
+                "word": 2170747208
+              },
+              {
+                "mask": 4294967295,
+                "relative": -11,
+                "word": 2080899750
+              },
+              {
+                "mask": 4294901763,
+                "relative": -10,
+                "word": 4162977681
+              },
+              {
+                "mask": 4294901763,
+                "relative": -9,
+                "word": 4160815232
+              },
+              {
+                "mask": 4294967295,
+                "relative": -8,
+                "word": 799211520
+              },
+              {
+                "mask": 4294901760,
+                "relative": -7,
+                "word": 939524097
+              },
+              {
+                "mask": 4294901760,
+                "relative": -6,
+                "word": 2167078912
+              },
+              {
+                "mask": 4294967295,
+                "relative": -5,
+                "word": 2089100152
+              },
+              {
+                "mask": 4294901760,
+                "relative": -4,
+                "word": 958997400
+              },
+              {
+                "mask": 4294967295,
+                "relative": -3,
+                "word": 2032730144
+              },
+              {
+                "mask": 4294901760,
+                "relative": -2,
+                "word": 2550726689
+              },
+              {
+                "mask": 4294901760,
+                "relative": -1,
+                "word": 2424897572
+              },
+              {
+                "mask": 4294901760,
+                "relative": 0,
+                "word": 2557018146
+              },
+              {
+                "mask": 4294901763,
+                "relative": 1,
+                "word": 1100873772
+              }
+            ],
+            "site_index": 14
+          }
+        }
+      ],
+      "title_version": "01.00"
+    },
+    "01.06": {
+      "author": "Spartacus Legends preservation project",
+      "games": [
+        [
+          "Spartacus Legends",
+          [
+            "01.06"
+          ]
+        ]
+      ],
+      "name": "Spartacus Legends - Server emulator compatibility",
+      "notes": "REQUIRED for the 01.06 update. Same purpose as the 01.00 entry: works around RPCS3's unavailable Commerce2 middleware-ready callback and incomplete product-info result so the original backend state machine reaches state 26 and emits the readiness edge that starts native server-save enumeration, then restores the complete locally serialized profile when the retired retail profile service is unavailable, and finalizes the server-backed recruitment-pool refresh callback. It also suppresses a 01.06-only \"Updating Game Data\" modal whose no-file continuation never dismisses it. 01.06 inverted the profile-fallback branch, so that instruction is a nop here rather than a branch. Addresses derived by static comparison of the 01.00 and 01.06 executables; see notes/13-v106-port.md.",
+      "patch_version": "4.4",
+      "sites": [
+        {
+          "address": 5750412,
+          "label": "continue when the Commerce2 middleware callback is unavailable",
+          "original": 1100874660,
+          "replacement": 1610612736,
+          "target": {
+            "instructions": [
+              {
+                "mask": 4294901760,
+                "relative": -14,
+                "word": 2434727936
+              },
+              {
+                "mask": 4227858435,
+                "relative": -13,
+                "word": 1275067848
+              },
+              {
+                "mask": 4294901760,
+                "relative": -12,
+                "word": 2153918076
+              },
+              {
+                "mask": 4227858435,
+                "relative": -11,
+                "word": 1272090265
+              },
+              {
+                "mask": 4294901760,
+                "relative": -10,
+                "word": 1610612736
+              },
+              {
+                "mask": 4294901760,
+                "relative": -9,
+                "word": 956301343
+              },
+              {
+                "mask": 4294901760,
+                "relative": -8,
+                "word": 2434727936
+              },
+              {
+                "mask": 4227858435,
+                "relative": -7,
+                "word": 1275064844
+              },
+              {
+                "mask": 4294901760,
+                "relative": -6,
+                "word": 2153917956
+              },
+              {
+                "mask": 4227858435,
+                "relative": -5,
+                "word": 1272090241
+              },
+              {
+                "mask": 4294901760,
+                "relative": -4,
+                "word": 1610612736
+              },
+              {
+                "mask": 4294901760,
+                "relative": -3,
+                "word": 956301346
+              },
+              {
+                "mask": 4294901760,
+                "relative": -2,
+                "word": 2434727936
+              },
+              {
+                "mask": 4227858435,
+                "relative": -1,
+                "word": 1275064820
+              },
+              {
+                "mask": 4294901760,
+                "relative": 0,
+                "word": 956301333
+              },
+              {
+                "mask": 4294901760,
+                "relative": 1,
+                "word": 2434727936
+              }
+            ],
+            "site_index": 14
+          },
+          "window": {
+            "instructions": [
+              {
+                "mask": 4294901763,
+                "relative": -14,
+                "word": 1084095672
+              },
+              {
+                "mask": 4294901760,
+                "relative": -13,
+                "word": 956301341
+              },
+              {
+                "mask": 4294901760,
+                "relative": -12,
+                "word": 2153918068
+              },
+              {
+                "mask": 4294901760,
+                "relative": -11,
+                "word": 2434727936
+              },
+              {
+                "mask": 4227858435,
+                "relative": -10,
+                "word": 1272091193
+              },
+              {
+                "mask": 4294901760,
+                "relative": -9,
+                "word": 1610612736
+              },
+              {
+                "mask": 4227858435,
+                "relative": -8,
+                "word": 1275065780
+              },
+              {
+                "mask": 4294901760,
+                "relative": -7,
+                "word": 2153918016
+              },
+              {
+                "mask": 4227858435,
+                "relative": -6,
+                "word": 1272091177
+              },
+              {
+                "mask": 4294901760,
+                "relative": -5,
+                "word": 1610612736
+              },
+              {
+                "mask": 4227858435,
+                "relative": -4,
+                "word": 1271872025
+              },
+              {
+                "mask": 4294901760,
+                "relative": -3,
+                "word": 1610612736
+              },
+              {
+                "mask": 4294967295,
+                "relative": -2,
+                "word": 1415775806
+              },
+              {
+                "mask": 4294967295,
+                "relative": -1,
+                "word": 797114368
+              },
+              {
+                "mask": 4294901763,
+                "relative": 0,
+                "word": 1100874660
+              },
+              {
+                "mask": 4294901760,
+                "relative": 1,
+                "word": 2170694908
+              }
+            ],
+            "site_index": 14
+          }
+        },
+        {
+          "address": 5750564,
+          "label": "do not show the orphaned Updating Game Data modal",
+          "original": 1271049033,
+          "replacement": 1610612736,
+          "target": {
+            "instructions": [
+              {
+                "mask": 4294901760,
+                "relative": -8,
+                "word": 1610612736
+              },
+              {
+                "mask": 4294901763,
+                "relative": -7,
+                "word": 3892381120
+              },
+              {
+                "mask": 4294901763,
+                "relative": -6,
+                "word": 3949004168
+              },
+              {
+                "mask": 4294901763,
+                "relative": -5,
+                "word": 3951101328
+              },
+              {
+                "mask": 4294967295,
+                "relative": -4,
+                "word": 2080900006
+              },
+              {
+                "mask": 4294901763,
+                "relative": -3,
+                "word": 3953198488
+              },
+              {
+                "mask": 4294901760,
+                "relative": -2,
+                "word": 941688240
+              },
+              {
+                "mask": 4294967295,
+                "relative": -1,
+                "word": 1317011488
+              },
+              {
+                "mask": 4294901763,
+                "relative": 0,
+                "word": 4162976337
+              },
+              {
+                "mask": 4294967295,
+                "relative": 1,
+                "word": 2080899750
+              },
+              {
+                "mask": 4294901763,
+                "relative": 2,
+                "word": 4221633944
+              },
+              {
+                "mask": 4294901763,
+                "relative": 3,
+                "word": 4160816576
+              },
+              {
+                "mask": 4294901760,
+                "relative": 4,
+                "word": 1000407152
+              },
+              {
+                "mask": 4294901760,
+                "relative": 5,
+                "word": 939524097
+              },
+              {
+                "mask": 4294901760,
+                "relative": 6,
+                "word": 958398464
+              },
+              {
+                "mask": 4294901763,
+                "relative": 7,
+                "word": 4217439624
+              }
+            ],
+            "site_index": 8
+          },
+          "window": {
+            "instructions": [
+              {
+                "mask": 4294901760,
+                "relative": -14,
+                "word": 1610612736
+              },
+              {
+                "mask": 4294901760,
+                "relative": -13,
+                "word": 956301326
+              },
+              {
+                "mask": 4294901760,
+                "relative": -12,
+                "word": 2434727936
+              },
+              {
+                "mask": 4227858435,
+                "relative": -11,
+                "word": 1270994533
+              },
+              {
+                "mask": 4294901760,
+                "relative": -10,
+                "word": 1610612736
+              },
+              {
+                "mask": 4294967295,
+                "relative": -9,
+                "word": 2019754016
+              },
+              {
+                "mask": 4227858435,
+                "relative": -8,
+                "word": 1271015761
+              },
+              {
+                "mask": 4294901760,
+                "relative": -7,
+                "word": 1610612736
+              },
+              {
+                "mask": 4227858435,
+                "relative": -6,
+                "word": 1270994513
+              },
+              {
+                "mask": 4294901760,
+                "relative": -5,
+                "word": 1610612736
+              },
+              {
+                "mask": 4294901760,
+                "relative": -4,
+                "word": 2158112288
+              },
+              {
+                "mask": 4294901760,
+                "relative": -3,
+                "word": 2156014868
+              },
+              {
+                "mask": 4294967295,
+                "relative": -2,
+                "word": 2019754016
+              },
+              {
+                "mask": 4294901760,
+                "relative": -1,
+                "word": 952107008
+              },
+              {
+                "mask": 4227858435,
+                "relative": 0,
+                "word": 1271049033
+              },
+              {
+                "mask": 4294901760,
+                "relative": 1,
+                "word": 1610612736
+              }
+            ],
+            "site_index": 14
+          }
+        },
+        {
+          "address": 5749496,
+          "label": "enter the game's state-26 success path",
+          "original": 1084097356,
+          "replacement": 1207960396,
+          "target": {
+            "instructions": [
+              {
+                "mask": 4294901760,
+                "relative": -14,
+                "word": 2153917952
+              },
+              {
+                "mask": 4227858435,
+                "relative": -13,
+                "word": 1272091277
+              },
+              {
+                "mask": 4294901760,
+                "relative": -12,
+                "word": 1610612736
+              },
+              {
+                "mask": 4294901760,
+                "relative": -11,
+                "word": 956301346
+              },
+              {
+                "mask": 4294901760,
+                "relative": -10,
+                "word": 2434727936
+              },
+              {
+                "mask": 4227858435,
+                "relative": -9,
+                "word": 1271874877
+              },
+              {
+                "mask": 4294901760,
+                "relative": -8,
+                "word": 1610612736
+              },
+              {
+                "mask": 4227858435,
+                "relative": -7,
+                "word": 1275065848
+              },
+              {
+                "mask": 4294901760,
+                "relative": -6,
+                "word": 2153918028
+              },
+              {
+                "mask": 4227858435,
+                "relative": -5,
+                "word": 1272091245
+              },
+              {
+                "mask": 4294901760,
+                "relative": -4,
+                "word": 1610612736
+              },
+              {
+                "mask": 4294901760,
+                "relative": -3,
+                "word": 956301346
+              },
+              {
+                "mask": 4294901760,
+                "relative": -2,
+                "word": 2434727936
+              },
+              {
+                "mask": 4227858435,
+                "relative": -1,
+                "word": 1275065824
+              },
+              {
+                "mask": 4294901760,
+                "relative": 0,
+                "word": 2166500820
+              },
+              {
+                "mask": 4294901760,
+                "relative": 1,
+                "word": 2171146732
+              }
+            ],
+            "site_index": 14
+          },
+          "window": {
+            "instructions": [
+              {
+                "mask": 4294967295,
+                "relative": -11,
+                "word": 3221946368
+              },
+              {
+                "mask": 4294967295,
+                "relative": -10,
+                "word": 3249078272
+              },
+              {
+                "mask": 4294967295,
+                "relative": -9,
+                "word": 3959449640
+              },
+              {
+                "mask": 4294967295,
+                "relative": -8,
+                "word": 4286603264
+              },
+              {
+                "mask": 4294967295,
+                "relative": -7,
+                "word": 3490381824
+              },
+              {
+                "mask": 4294901763,
+                "relative": -6,
+                "word": 1100744664
+              },
+              {
+                "mask": 4294901760,
+                "relative": -5,
+                "word": 2153917904
+              },
+              {
+                "mask": 4227858435,
+                "relative": -4,
+                "word": 1270708333
+              },
+              {
+                "mask": 4294901760,
+                "relative": -3,
+                "word": 1610612736
+              },
+              {
+                "mask": 4294967295,
+                "relative": -2,
+                "word": 1415775806
+              },
+              {
+                "mask": 4294967295,
+                "relative": -1,
+                "word": 797114368
+              },
+              {
+                "mask": 4294901763,
+                "relative": 0,
+                "word": 1084097356
+              },
+              {
+                "mask": 4294901760,
+                "relative": 1,
+                "word": 2166500820
+              },
+              {
+                "mask": 4294901760,
+                "relative": 2,
+                "word": 2148078060
+              },
+              {
+                "mask": 4294967295,
+                "relative": 3,
+                "word": 796917766
+              },
+              {
+                "mask": 4294901763,
+                "relative": 4,
+                "word": 1084160280
+              }
+            ],
+            "site_index": 11
+          }
+        },
+        {
+          "address": 1404340,
+          "label": "supply Commerce readiness to the native save enumerator",
+          "original": 2283667552,
+          "replacement": 939524097,
+          "target": null,
+          "window": {
+            "instructions": [
+              {
+                "mask": 4294967295,
+                "relative": -14,
+                "word": 796917760
+              },
+              {
+                "mask": 4294901763,
+                "relative": -13,
+                "word": 1084096772
+              },
+              {
+                "mask": 4294901760,
+                "relative": -12,
+                "word": 2283667541
+              },
+              {
+                "mask": 4294967295,
+                "relative": -11,
+                "word": 796917760
+              },
+              {
+                "mask": 4294901763,
+                "relative": -10,
+                "word": 1084096636
+              },
+              {
+                "mask": 4294967295,
+                "relative": -9,
+                "word": 2139349880
+              },
+              {
+                "mask": 4227858435,
+                "relative": -8,
+                "word": 1275056053
+              },
+              {
+                "mask": 4294967295,
+                "relative": -7,
+                "word": 2139349880
+              },
+              {
+                "mask": 4227858435,
+                "relative": -6,
+                "word": 1275057873
+              },
+              {
+                "mask": 4294967295,
+                "relative": -5,
+                "word": 2139349880
+              },
+              {
+                "mask": 4227858435,
+                "relative": -4,
+                "word": 1207968613
+              },
+              {
+                "mask": 4294901760,
+                "relative": -3,
+                "word": 1610612736
+              },
+              {
+                "mask": 4294967295,
+                "relative": -2,
+                "word": 2139349880
+              },
+              {
+                "mask": 4227858435,
+                "relative": -1,
+                "word": 1275060925
+              },
+              {
+                "mask": 4294901760,
+                "relative": 0,
+                "word": 2283667552
+              },
+              {
+                "mask": 4294967295,
+                "relative": 1,
+                "word": 796917760
+              }
+            ],
+            "site_index": 14
+          }
+        },
+        {
+          "address": 751880,
+          "label": "apply the locally saved profile",
+          "original": 1100873792,
+          "replacement": 1610612736,
+          "target": {
+            "instructions": [
+              {
+                "mask": 4294967295,
+                "relative": -14,
+                "word": 2143548280
+              },
+              {
+                "mask": 4294901760,
+                "relative": -13,
+                "word": 950009857
+              },
+              {
+                "mask": 4294901760,
+                "relative": -12,
+                "word": 2157903872
+              },
+              {
+                "mask": 4227858435,
+                "relative": -11,
+                "word": 1209672245
+              },
+              {
+                "mask": 4294901760,
+                "relative": -10,
+                "word": 1610612736
+              },
+              {
+                "mask": 4294901763,
+                "relative": -9,
+                "word": 3892379808
+              },
+              {
+                "mask": 4294901763,
+                "relative": -8,
+                "word": 3951100016
+              },
+              {
+                "mask": 4294901760,
+                "relative": -7,
+                "word": 945815552
+              },
+              {
+                "mask": 4294901763,
+                "relative": -6,
+                "word": 3953197176
+              },
+              {
+                "mask": 4294901763,
+                "relative": -5,
+                "word": 3955294336
+              },
+              {
+                "mask": 4294967295,
+                "relative": -4,
+                "word": 2080900006
+              },
+              {
+                "mask": 4294901763,
+                "relative": -3,
+                "word": 3957391496
+              },
+              {
+                "mask": 4294901760,
+                "relative": -2,
+                "word": 941686928
+              },
+              {
+                "mask": 4294967295,
+                "relative": -1,
+                "word": 1317011488
+              },
+              {
+                "mask": 4294901760,
+                "relative": 0,
+                "word": 2212669448
+              },
+              {
+                "mask": 4294901760,
+                "relative": 1,
+                "word": 950015416
+              }
+            ],
+            "site_index": 14
+          },
+          "window": {
+            "instructions": [
+              {
+                "mask": 4294967295,
+                "relative": -14,
+                "word": 798949397
+              },
+              {
+                "mask": 4294901760,
+                "relative": -13,
+                "word": 1006567425
+              },
+              {
+                "mask": 4294901763,
+                "relative": -12,
+                "word": 1084162016
+              },
+              {
+                "mask": 4294901760,
+                "relative": -11,
+                "word": 1016987649
+              },
+              {
+                "mask": 4294901760,
+                "relative": -10,
+                "word": 2210572292
+              },
+              {
+                "mask": 4294901760,
+                "relative": -9,
+                "word": 948219100
+              },
+              {
+                "mask": 4294967295,
+                "relative": -8,
+                "word": 2143548280
+              },
+              {
+                "mask": 4294967295,
+                "relative": -7,
+                "word": 2021916704
+              },
+              {
+                "mask": 4227858435,
+                "relative": -6,
+                "word": 1209681281
+              },
+              {
+                "mask": 4294901760,
+                "relative": -5,
+                "word": 1610612736
+              },
+              {
+                "mask": 4227858435,
+                "relative": -4,
+                "word": 1275068205
+              },
+              {
+                "mask": 4227858435,
+                "relative": -3,
+                "word": 1275066825
+              },
+              {
+                "mask": 4294967295,
+                "relative": -2,
+                "word": 1415775806
+              },
+              {
+                "mask": 4294967295,
+                "relative": -1,
+                "word": 797114368
+              },
+              {
+                "mask": 4294901763,
+                "relative": 0,
+                "word": 1100873792
+              },
+              {
+                "mask": 4294901760,
+                "relative": 1,
+                "word": 2212669448
+              }
+            ],
+            "site_index": 14
+          }
+        },
+        {
+          "address": 1948980,
+          "label": "accept recruit-pool refresh completion",
+          "original": 2557018146,
+          "replacement": 2550726690,
+          "target": null,
+          "window": {
+            "instructions": [
+              {
+                "mask": 4294967295,
+                "relative": -14,
+                "word": 2032336928
+              },
+              {
+                "mask": 4227858435,
+                "relative": -13,
+                "word": 1275068108
+              },
+              {
+                "mask": 4294901760,
+                "relative": -12,
+                "word": 2170688136
+              },
+              {
+                "mask": 4294967295,
+                "relative": -11,
+                "word": 2080899750
+              },
+              {
+                "mask": 4294901763,
+                "relative": -10,
+                "word": 4162977681
+              },
+              {
+                "mask": 4294901763,
+                "relative": -9,
+                "word": 4160815232
+              },
+              {
+                "mask": 4294967295,
+                "relative": -8,
+                "word": 799211520
+              },
+              {
+                "mask": 4294901760,
+                "relative": -7,
+                "word": 939524097
+              },
+              {
+                "mask": 4294901760,
+                "relative": -6,
+                "word": 2167078912
+              },
+              {
+                "mask": 4294967295,
+                "relative": -5,
+                "word": 2089100152
+              },
+              {
+                "mask": 4294901760,
+                "relative": -4,
+                "word": 958997448
+              },
+              {
+                "mask": 4294967295,
+                "relative": -3,
+                "word": 2032730144
+              },
+              {
+                "mask": 4294901760,
+                "relative": -2,
+                "word": 2550726689
+              },
+              {
+                "mask": 4294901760,
+                "relative": -1,
+                "word": 2424897572
+              },
+              {
+                "mask": 4294901760,
+                "relative": 0,
+                "word": 2557018146
+              },
+              {
+                "mask": 4294901763,
+                "relative": 1,
+                "word": 1100873772
+              }
+            ],
+            "site_index": 14
+          }
+        }
+      ],
+      "title_version": "01.06"
+    }
+  },
+  "generated_from": {
+    "01.00": {
+      "elf": "EBOOT.elf",
+      "ppu_hash": "PPU-81471d050c14f4d20b4027686f8b571dafd32394",
+      "sha256": "dec7736c54ea0b9671420e78d7c850d1f5608e86878631fe17362cf3499ed2b2"
+    },
+    "01.06": {
+      "elf": "EBOOT-1.06.elf",
+      "ppu_hash": "PPU-131aece6ae8526d13307be925f48c87f73c43799",
+      "sha256": "9a024c5d2c07af6805a2188c2781963f062903ce8f33c7376293943a119a122a"
+    }
+  },
+  "required_patch": "Spartacus Legends - Server emulator compatibility",
+  "schema": 1
+}

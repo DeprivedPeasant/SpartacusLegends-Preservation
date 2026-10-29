@@ -20,6 +20,7 @@ from server_config import (
     config_path as server_config_path,
     read_title_version,
 )
+import user_events
 
 
 DEFAULT_HTTP_PORT = 80
@@ -29,6 +30,12 @@ DEFAULT_PINE_PORT = 28012
 
 
 def application_dir() -> Path:
+    # Narrow override used by launcher tests (and by packaging experiments) so
+    # a test run never reads or writes the real data/, logs/ or backups/
+    # directories. Normal launches leave the variable unset.
+    override = os.environ.get("SPARTACUS_BASE_DIR")
+    if override:
+        return Path(override).expanduser().resolve()
     if getattr(sys, "frozen", False):
         return Path(sys.executable).resolve().parent
     return Path(__file__).resolve().parents[1]
@@ -115,10 +122,23 @@ def reserve_ports(host: str, http_port: int, auth_port: int, secure_port: int):
                     sock.listen(1)
             except OSError as error:
                 sock.close()
-                raise RuntimeError(
+                detail = ""
+                try:
+                    import port_diagnostics
+                    detail = port_diagnostics.diagnose(
+                        port,
+                        "tcp" if kind == socket.SOCK_STREAM else "udp",
+                        error,
+                    ).format()
+                except Exception:  # the diagnostic must never hide the error
+                    detail = ""
+                message = (
                     f"{label} cannot bind {host}:{port}: {error}. "
                     "Close the program using that port and try again."
-                ) from error
+                )
+                if detail:
+                    message += "\n" + detail
+                raise RuntimeError(message) from error
             reservations.append(sock)
         return reservations
     except Exception:
@@ -208,6 +228,13 @@ def parse_args(argv=None):
                              "complete data directory is backed up")
     parser.add_argument("--no-wait", action="store_true",
                         help="do not pause on a startup error")
+    parser.add_argument("--verbose", action="store_true",
+                        help="show the full protocol trace on the console; "
+                             "the log files always receive it in full")
+    parser.add_argument("--control-stdin", action="store_true",
+                        help="read JSON economy commands and the plain line "
+                             "'stop' from stdin (used by the GUI); also turns "
+                             "on @@EVENT machine-readable user events")
     parser.add_argument("--run-seconds", type=float, default=0,
                         help=argparse.SUPPRESS)
     return parser.parse_args(argv)
@@ -428,6 +455,9 @@ def main() -> int:
         sys.stdout.reconfigure(line_buffering=True)
     args = parse_args()
     base_dir = application_dir()
+    # Set before importing prudp_server / spartacus_onlineconfig: both read the
+    # flag once at import time. File logging is never affected.
+    os.environ["SPARTACUS_CONSOLE_DETAIL"] = "0" if not args.verbose else "1"
     if args.replace_existing_01_06 and not args.migrate_01_00_to_01_06:
         print("MIGRATION ERROR: --replace-existing-01.06 requires "
               "--migrate-01.00-to-01.06", file=sys.stderr)
@@ -548,6 +578,17 @@ def main() -> int:
 
     stop_event = threading.Event()
     failures = queue.Queue()
+    if args.control_stdin:
+        import server_control
+        # The GUI parses @@EVENT for the user view and @@REPLY for commands.
+        user_events.set_machine_output(True)
+        threading.Thread(
+            target=server_control.serve_control_channel,
+            args=(stop_event, prudp_server.ECONOMY, sys.stdin,
+                  lambda line: print(line, flush=True), args.title_version),
+            name="Control channel",
+            daemon=True,
+        ).start()
     ready_http = threading.Event()
     ready_auth = threading.Event()
     ready_secure = threading.Event()
@@ -623,6 +664,7 @@ def main() -> int:
         print(f"Legacy roster bridge: RPCS3 IPC port {args.pine_port}")
     print("Start the game, log in, and leave this window open.")
     print("Press Ctrl+C to stop the server.\n")
+    user_events.emit("ready", "Server ready - start the game in RPCS3")
 
     deadline = (time.monotonic() + args.run_seconds
                 if args.run_seconds > 0 else None)

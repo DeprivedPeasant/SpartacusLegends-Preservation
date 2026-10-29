@@ -17,6 +17,7 @@ notes/*
 packaging/*
 !packaging/build_release.ps1
 !packaging/requirements-build.txt
+!packaging/requirements-gui.txt
 !packaging/SpartacusLegends_ServerPatch.yml
 
 !patches/
@@ -34,6 +35,32 @@ tools/*
 !tools/title_save_migration.py
 !tools/patch_installer.py
 !tools/server_config.py
+!tools/user_events.py
+!tools/port_diagnostics.py
+!tools/server_control.py
+!tools/ppu_hash.py
+!tools/eboot_source.py
+!tools/game_detect.py
+!tools/adaptive_patch.py
+!tools/patch_signatures.json
+!tools/save_editor.py
+!tools/spartacus_gui.py
+
+!tools/server_gui/
+tools/server_gui/*
+!tools/server_gui/__init__.py
+!tools/server_gui/main_window.py
+!tools/server_gui/server_tab.py
+!tools/server_gui/player_tab.py
+!tools/server_gui/items_tab.py
+!tools/server_gui/patch_tab.py
+!tools/server_gui/server_process.py
+!tools/server_gui/theme.py
+!tools/server_gui/widgets.py
+
+!scripts/
+scripts/*
+!scripts/build_patch_signatures.py
 !tools/UbiOnlineConfigService/
 tools/UbiOnlineConfigService/*
 !tools/UbiOnlineConfigService/__init__.py
@@ -54,6 +81,15 @@ tests/*
 !tests/test_server_startup.py
 !tests/test_title_versions.py
 !tests/test_title_save_migration.py
+!tests/test_user_events.py
+!tests/test_port_diagnostics.py
+!tests/test_server_control.py
+!tests/test_ppu_hash.py
+!tests/test_eboot_source.py
+!tests/test_game_detect.py
+!tests/test_adaptive_patch.py
+!tests/test_save_editor.py
+!tests/test_gui_smoke.py
 
 **/__pycache__/
 *.py[cod]

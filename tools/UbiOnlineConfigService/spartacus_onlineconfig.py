@@ -14,6 +14,16 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
+try:
+    import migration_coordinator
+except ImportError:  # Standalone HTTP-only launch has no native size table.
+    migration_coordinator = None
+
+try:
+    import user_events
+except ImportError:  # Imported as tools.* by the unit tests.
+    from tools import user_events
+
 
 SPARTACUS_ONLINE_CONFIG_ID = "423eddd2469548bcb7e78d2d45606d5d"
 DEFAULT_RDV_HOST = os.environ.get("RDV_HOST", "127.0.0.1")
@@ -27,6 +37,37 @@ DEFAULT_USER_CONTENT_DIR = Path(os.environ.get(
     "SPARTACUS_USER_CONTENT_DIR",
     Path(__file__).resolve().parents[2] / "data" / "usercontent",
 ))
+# Cleared by the launcher (before this module is imported) unless --verbose.
+# The log file always receives the detail line.
+CONSOLE_DETAIL = os.environ.get("SPARTACUS_CONSOLE_DETAIL", "1") not in ("", "0")
+
+NATIVE_OBJECT_NAMES = {
+    0x80000001: "profile",
+    0x80000002: "campaign",
+    0x80000003: "roster",
+}
+
+
+def native_object_name(type_id: int, size: int) -> str | None:
+    """Name a UserContent body only when it is an exact-size native save.
+
+    Uses the same per-title size table as the migration coordinator, so the
+    user event is emitted only for the objects the client actually restores.
+    Returns None for the remote-config object, wrong sizes, or when the table
+    is unavailable (standalone HTTP service).
+    """
+    if migration_coordinator is None:
+        return None
+    title_version = os.environ.get("SPARTACUS_TITLE_VERSION", "01.00")
+    try:
+        info = migration_coordinator.native_objects(title_version).get(type_id)
+    except (KeyError, ValueError):
+        return None
+    if info is None or not info.accepts(size):
+        return None
+    return NATIVE_OBJECT_NAMES.get(type_id, f"object 0x{type_id:08x}")
+
+
 class ServiceLog:
     def __init__(self, path: Path):
         self.path = Path(path)
@@ -36,7 +77,8 @@ class ServiceLog:
         timestamp = _datetime.datetime.now().strftime("%H:%M:%S.%f")
         line = f"[{timestamp}] [config] {message}"
         with self._lock:
-            print(line, flush=True)
+            if CONSOLE_DETAIL:
+                print(line, flush=True)
             self.path.parent.mkdir(parents=True, exist_ok=True)
             with self.path.open("a", encoding="utf-8", errors="replace") as stream:
                 stream.write(line + "\n")
@@ -160,6 +202,10 @@ def make_handler(rdv_host: str, rdv_port: int, service_log: ServiceLog,
                         f"sha256={digest}"
                         + (f" state={stored_state}" if stored_state else "")
                     )
+                    object_name = native_object_name(type_id, len(body))
+                    if object_name is not None:
+                        user_events.emit(
+                            "save_uploaded", f"Progress saved ({object_name})")
                     self._send_body(200, b"")
                     return
                 if self.command in ("GET", "HEAD"):
@@ -173,6 +219,10 @@ def make_handler(rdv_host: str, rdv_port: int, service_log: ServiceLog,
                     service_log.write(
                         f"{self.command} {self.path} served={len(body)}"
                     )
+                    object_name = native_object_name(type_id, len(body))
+                    if object_name is not None:
+                        user_events.emit(
+                            "save_restored", f"Save restored ({object_name})")
                     self._send_body(200, body)
                     return
                 self._send_body(405, b"")

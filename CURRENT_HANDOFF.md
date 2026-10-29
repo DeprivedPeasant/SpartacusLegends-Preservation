@@ -1,5 +1,154 @@
 # Current AI handoff — v0.6.5 release checkpoint
 
+## Unreleased: Qt frontend branch
+
+Branch `feature/qt-frontend-adaptive-patch` (not committed, not released).
+Working-tree implementation of `notes/22-qt-frontend-and-adaptive-patch-plan.md`;
+see `notes/24-implementation-log.md` for the per-phase record.
+
+Implemented and automated-tested:
+
+- User-facing event stream (`tools/user_events.py`) with a plain console view
+  by default and `--verbose` for the full detail trace; log files are unchanged.
+- Port-blocked diagnostics (`tools/port_diagnostics.py`), appended to the
+  existing `reserve_ports()` startup error.
+- Opt-in `--control-stdin` JSON control channel (`tools/server_control.py`)
+  with `get_economy`, `set_balances`, item add/remove/quantity; `stop` for a
+  clean shutdown; `set_fame` deliberately refused. Live `balance_synced`
+  events for m6/m7/m11/m13/m14/m15 and 01.06 m19/m20.
+- Qt-free offline save editor (`tools/save_editor.py`): native `1.bin` balance
+  words at `+0x04/+0x0C/+0x14`, companion `profile.json`, SHA-256 backup
+  manifest, restore, item grouping, refusal while the server runs.
+- PySide6 GUI (`tools/server_gui/`, entry `tools/spartacus_gui.py`): Server,
+  Player, Items and Patch setup tabs; Fusion light/dark palette; textual status.
+- PPU hash reproduction (`tools/ppu_hash.py`): both reference ELFs hash
+  exactly. `tools/eboot_source.py` for ELF-or-RPCS3-decrypt input.
+- Adaptive patch signatures (`scripts/build_patch_signatures.py`,
+  `tools/patch_signatures.json`, `tools/adaptive_patch.py`) and installer flags
+  `--eboot` / `--eboot-elf` / `--adaptive`; generated section + JSON report;
+  cross-build test locates state-26/readiness/recruit on 01.06 and refuses the
+  changed profile-fallback site.
+
+Post-review changes on the branch:
+
+- Offline edits refuse while a server outside the GUI holds UDP 21000/21001;
+  non-branch adaptive sites require the exact reference original word.
+- 01.06 save editing: 01.06 does not keep balances in its native profile
+  (every 01.06-written `0x15B8` profile under `.build` holds zero at
+  `+0x04/+0x0C/+0x14` and nowhere contains the companion values; Shop m19/m20
+  push all three balances from the server). The editor therefore edits only
+  `profile-01.06.json` and never touches the 01.06 native object. Live fame is
+  allowed on 01.06 only (`server_control.LIVE_FAME_TITLE_VERSIONS`).
+- GUI redesign (`tools/server_gui/theme.py`, `widgets.py`): sidebar, header
+  status pill (glyph + word), bronze dark theme and light theme.
+
+**Adaptive patch live-proven on a real variant (2026-10-29).** Jake's
+`rpcs3-v0.0.42-C` install has a different 01.00 dump: PARAM.SFO `APP_VER 01.00`
+but `VERSION 01.01`; EBOOT.BIN 9,269,952 bytes (SHA-256 `3078049D…C327`);
+decrypted ELF text segment 0x2280 bytes larger than the reference and different
+from the first function; PPU hash `af74addba068e9fd8ac2636ecca9bcdfb991ab4c`.
+`rpcs3.exe --decrypt` (via `eboot_source`) produced the ELF in 1.4 s. All four
+01.00 sites resolved uniquely with exact original words: state-26
+`0x004F4BB8`, readiness `0x00106EA4`, profile fallback `0x000698BC`, recruit
+`0x001762C4` (branch displacements unchanged). Over ±64 instructions every
+site and branch target had identical opcodes; differences were relocated
+immediates only. The 01.06 signature set was refused as a whole. The
+installer (`--adaptive --eboot`) merged and enabled the section idempotently;
+RPCS3 logged `PAT: Applied patch (hash='PPU-af74addb…') (<- 4)` and Jake
+confirmed the game worked. Optional patches are not generated for variants.
+
+Built-in patch setup (2026-10-29, automated-tested; GUI not yet live-run):
+
+- `tools/game_detect.py`: finds the game from the RPCS3 folder
+  (`find_param_sfo`), decrypts/hashes its EBOOT, classifies it as supported,
+  generated or unknown (with an adaptive dry run), and parses `log/RPCS3.log`
+  for the last NPUB30746 boot (`Emulator::BootGame`, `PPU executable hash`,
+  `PAT: Applied patch ... Server emulator compatibility`). A running RPCS3
+  locks its log (reported as unreadable) and a second `rpcs3.exe --decrypt`
+  produces nothing while it is open (`RPCS3RunningError`; results are cached
+  by EBOOT SHA-256 + build + signature-database hash).
+- `rpcs3.exe --decrypt` rewrites `log/RPCS3.log`, `.gz`, `TTY.log` and
+  `RPCS3.buf` (verified on v0.0.42). `eboot_source.preserved_run_files`
+  restores them, retrying while RPCS3's error helper holds them, and keeps a
+  `*.before-decrypt` copy beside the log if they stay locked. The child gets
+  an environment without `QT_*`/`QML*` variables (an inherited
+  `QT_QPA_PLATFORM=offscreen` made RPCS3 fail to start).
+- Installer CLI: auto-detects the EBOOT, hashes it, and generates the adaptive
+  section automatically for an unknown dump (`--no-adaptive`,
+  `--no-hash-check`); verify adds the last-boot line.
+- Server: the first UserStorage m21 for a native type per session emits
+  `patch_confirmed`. GUI: first run opens Patch setup; after `logged_in`, no
+  `patch_confirmed` within 60 s returns to Patch setup with an explanation.
+  GUI settings moved to `gui-settings.ini` beside the app.
+- `EconomyStore._save` retries `os.replace` on Windows `PermissionError`
+  (reproduced under back-to-back saves); 406 tests pass.
+- Note: from Claude's sandboxed shell, RPCS3 v0.0.43 `--decrypt` crashes in
+  `utils::shm::shm()` (Access denied). It worked on v0.0.42 there; confirm the
+  GUI decrypt from Jake's own session.
+
+Packaging corrections (2026-10-29):
+
+- The packaged GUI's `rpcs3.exe --decrypt` failed with RPCS3's
+  "VCRUNTIME140.dll was incorrectly installed at ...\_MEIxxxx": the
+  PyInstaller bootloader's `SetDllDirectoryW(_MEIPASS)` is inherited by child
+  processes. `eboot_source.outside_program_dll_search()` resets it around the
+  launch (restored afterwards), `rpcs3_environment()` drops Qt/PyInstaller
+  variables and `_MEI` PATH entries, and the child runs in RPCS3's folder.
+  The GUI also launches the server this way.
+- The one-file GUI failed for Jake (non-admin) with PyInstaller's "Could not
+  create temporary directory!" (cause not reproduced; TEMP ACLs were normal).
+  The GUI is now a one-folder build: `SpartacusLegendsServerGUI.exe` plus
+  `SpartacusLegendsServerGUI_runtime\`, nothing unpacked at launch. Server
+  and installer stay one-file.
+- `build_release.ps1` zipped `PackageRoot\*`, so a test run from the package
+  folder put its `data\`, `logs\` and `gui-settings.ini` into the ZIP (today's
+  v0.7.0 test ZIPs only; every earlier release ZIP was checked and is clean).
+  The script now zips an explicit item list and fails if data, logs, backups,
+  GUI settings or `server-config.json` appear in the archive.
+
+- RPCS3 v0.0.43 `--decrypt` crashes for Jake too (not only in Claude's
+  sandbox) in `utils::shm::shm()` with Access denied; RPCS3's source shows
+  that constructor creating a sparse `rpcs3_vm_sparse.tmp` backing file.
+  v0.0.42 decrypted fine. `game_detect.KNOWN_EBOOTS` now maps the three
+  verified encrypted EBOOT.BIN SHA-256s (01.00 reference, 01.06 update, the
+  01.00 variant) to their PPU hashes, and RPCS3.log's `PPU executable hash`
+  is used when it belongs to the same unchanged EBOOT (`SYS: Path:`), so
+  rpcs3.exe is only started for an unknown dump. Installing the adaptive
+  section for a dump still needs its decrypted code (manual Utilities >
+  Decrypt PS3 Binaries if RPCS3 crashes).
+
+- Root cause of today's non-admin failures ("Could not create temporary
+  directory", Permission denied on RPCS3 config backups): the repo folder
+  `C:\Users\Jake\Coding\SpartacusLegends-RE` carries an explicit Low
+  mandatory integrity label `(OI)(CI)` (likely set by a sandboxing tool -
+  `CodexSandboxUsers` also appears in %TEMP%'s ACL). Every file under it
+  inherits Low, and Windows starts an exe at the lower of the parent's and
+  the file's level, so `.build\`/`dist\` exes and the build venv's Python run
+  at Low and cannot write Medium folders or %TEMP%. System Python outside the
+  repo is Medium. Users' downloaded releases are unaffected. The label was
+  not changed. `patch_installer.low_integrity_problem()` now detects it; the
+  GUI says so at startup and the CLI refuses with the explanation. The
+  installer also probes every target folder before writing and rolls back a
+  part-way failure (`InstallWriteError`). Test live builds from a copy
+  outside the repo.
+
+Unverified live (requires Jake):
+
+- Live gold/silver sync after a fight or shop purchase, and the following
+  native autosave containing the edited values.
+- A cold-boot restore after an offline edit.
+- Live item/boost edits (labelled experimental); live fame on 01.06.
+- The 01.06 save editor and the redesigned GUI on the packaged exe.
+- The variant install after the 01.06 update (next test).
+
+Live tests Jake must run: build/start server + GUI from source first; connect a
+cold-booted game; change gold/silver live; win one fight (m6) or buy one shop
+item (m7) and confirm the on-screen values match; return to the Ludus, wait
+~20 s, close RPCS3; confirm exact-size native PUTs; cold-boot and confirm the
+values persist. For adaptive: use a non-reference variant ELF if available,
+install with `--adaptive`, check the generated report and PPU section, then
+cold-boot login and native restore.
+
 ## 2026-09-05 boost refill fix (packaged live validation passed; released as v0.6.5)
 
 **Live validation passed:** isolated test at

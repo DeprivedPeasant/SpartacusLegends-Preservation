@@ -126,6 +126,69 @@ for the line beginning `PPU executable hash:`. It must read
 hash means the game build is not the supported one and no patch will apply to
 it.
 
+## Desktop frontend (optional, experimental)
+
+Newer releases also include `SpartacusLegendsServerGUI.exe` with its
+`SpartacusLegendsServerGUI_runtime` folder (keep the two together, beside
+`SpartacusLegendsServer.exe`; nothing is unpacked to `%TEMP%`). It starts and
+stops the same server, shows the session state in words ("Stopped",
+"Starting", "Ready", "Game connected"), lists plain-language events, and can
+show or hide the full detail log. The console `SpartacusLegendsServer.exe`
+remains the supported baseline and behaves exactly as before. Status is always
+spelled out in text as well as colour.
+
+- **Patch setup:** on first run the GUI opens this page. Choose your RPCS3
+  folder; the game, its version and its executable are found automatically.
+  The executable is decrypted from a temporary copy with that RPCS3 and its
+  PPU hash is checked (close RPCS3 first: a second `rpcs3.exe` cannot decrypt
+  while one is open). **Install / repair setup** then writes everything. The
+  page comes back by itself if the game logs in but never starts loading its
+  saves, which means the compatibility patch did not apply.
+- **Player tab, 01.06:** 01.06 keeps gold, silver and fame on the server only
+  (they are sent to the game at login and after each fight), so the editor
+  changes `profile-01.06.json` and never the game's own profile. Fame can be
+  edited live on 01.06.
+
+- **Player tab, server stopped:** edit gold, silver, fame and owned items
+  offline. Every save writes a SHA-256-verified backup under `data\backups`
+  first; **Restore backup** rolls it back.
+- **Player tab, server running:** gold and silver edits go through the running
+  server and are marked **Pending** until the game adopts them in its next
+  balance-carrying call — in practice after your next fight or shop purchase.
+  The game's own autosave then writes the new values. **Fame cannot be changed
+  live** (no response in 01.00 or 01.06 pushes fame to the client); edit fame
+  offline with the server stopped.
+- **Items tab:** live item and boost-quantity edits are **experimental**. They
+  are expected to appear at the next shop inventory refresh or login, which has
+  not yet been live-validated. Ludus slot entitlements cannot be removed live.
+
+### Adaptive patching (experimental)
+
+If your game's executable is a different dump (its PPU hash is not one of the
+two supported ones), the distributed patch never applies. Both the GUI's
+**Patch setup** page and `SpartacusLegendsPatchInstaller.exe` detect this
+themselves: they decrypt a temporary copy of `EBOOT.BIN` with your RPCS3, hash
+it, and generate a patch section for that exact dump by locating each patch
+site with masked instruction signatures (the GUI asks first).
+
+- If any site is not found exactly once, the whole set is refused - no address
+  is ever guessed. A JSON report with the resolved addresses is written beside
+  the patch backup for bug reports.
+- If automatic decryption fails, decrypt with RPCS3 **Utilities > Decrypt PS3
+  Binaries** and use the produced `.elf` (GUI option, or `--eboot-elf`).
+- Installer flags: `--no-adaptive` installs only the shipped patch;
+  `--no-hash-check` skips the executable check.
+- Decrypting runs `rpcs3.exe`, which normally rewrites RPCS3's log; the
+  installer puts your previous log back afterwards.
+
+If the GUI or installer says Windows is limiting it (Low integrity level),
+copy the whole release folder somewhere ordinary such as your Desktop and run
+it from there; some sandboxing tools mark the folders they work in that way.
+
+Do not copy another dump's `PPU-...` section: the hash is per executable.
+Adaptive patching has been proven on one real variant dump so far, so it is
+still labelled experimental.
+
 ## Manual setup
 
 Use this only if the installer cannot find your RPCS3 folder. It performs the
@@ -475,11 +538,18 @@ extract the ZIP properly, and run the extracted copy.
 
 ## Running from source
 
-Python 3.10 or newer is sufficient; there are no third-party runtime
-dependencies:
+Python 3.10 or newer is sufficient for the console server; there are no
+third-party runtime dependencies:
 
 ```powershell
 python tools\spartacus_server.py
+```
+
+The optional Qt frontend needs PySide6 and runs with:
+
+```powershell
+python -m pip install "PySide6>=6.7,<7"
+python tools\spartacus_gui.py
 ```
 
 To build the standalone Windows release:

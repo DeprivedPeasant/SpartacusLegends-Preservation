@@ -35,6 +35,11 @@ import os
 import threading
 import json
 
+try:
+    import user_events
+except ImportError:  # Imported as tools.prudp_server by the unit tests.
+    from tools import user_events
+
 PORT = 21000
 
 ACCESS_KEY = b"pbuT0dSs"
@@ -431,7 +436,19 @@ class EconomyStore:
             f.write("\n")
             f.flush()
             os.fsync(f.fileno())
-        os.replace(temporary, self.path)
+        # Windows can briefly refuse the replace while an antivirus or
+        # indexer still has the previous profile.json open (observed as
+        # PermissionError 13 under back-to-back saves). The temporary file is
+        # complete, so retrying the same replace is safe; anything else, or a
+        # lock that outlasts ~1 s, still raises.
+        for attempt in range(20):
+            try:
+                os.replace(temporary, self.path)
+                return
+            except PermissionError:
+                if attempt == 19:
+                    raise
+                time.sleep(0.05)
 
     def add_income(self, gold_delta, silver_delta):
         with self.lock:
@@ -482,6 +499,89 @@ class EconomyStore:
                 self.data["silver"] = max(0, self.data["silver"] - silver_cost)
             self._save()
             return self.data["gold"], self.data["silver"]
+
+    def set_balances(self, gold=None, silver=None, fame=None):
+        """Overwrite absolute balances from the opt-in control channel.
+
+        The game adopts the absolute balances in the next Monetization response
+        (m6/m7/m11/m13; on 01.06 also m19 at login and m20 after fights, which
+        carry fame). Clamped to the u32 range the wire format can carry. The
+        caller decides whether fame may be edited for the running build.
+        """
+        with self.lock:
+            before = (self.data["gold"], self.data["silver"],
+                      self.data["fame"])
+            if gold is not None:
+                self.data["gold"] = max(0, min(0xFFFFFFFF, int(gold)))
+            if silver is not None:
+                self.data["silver"] = max(0, min(0xFFFFFFFF, int(silver)))
+            if fame is not None:
+                self.data["fame"] = max(0, min(0xFFFFFFFF, int(fame)))
+            after = (self.data["gold"], self.data["silver"],
+                     self.data["fame"])
+            self._save()
+            log(f"*** Control balances gold {before[0]}->{after[0]} "
+                f"silver {before[1]}->{after[1]} "
+                f"fame {before[2]}->{after[2]} ***")
+            return after[:2] if fame is None else after
+
+    def add_owned_item(self, item_id, quantity=1):
+        """Add one ownership record from the control channel."""
+        with self.lock:
+            item_id = int(item_id) & 0xFFFFFFFF
+            if item_id == STORE_REFRESH_SENTINEL:
+                raise ValueError(
+                    f"{STORE_REFRESH_SENTINEL} is the store-refresh command, "
+                    "not an item"
+                )
+            quantity = int(quantity)
+            if not 0 <= quantity <= 99:
+                raise ValueError("item quantity must be between 0 and 99")
+            owned = set(self.data["owned_items"])
+            owned.add(item_id)
+            self.data["owned_items"] = sorted(owned)
+            self.data["item_quantities"][item_id] = quantity
+            self._save()
+            log(f"*** Control add item={item_id} quantity={quantity} ***")
+            return item_id, quantity
+
+    def remove_owned_item(self, item_id):
+        """Remove one ownership record, except purchased Ludus slots."""
+        with self.lock:
+            item_id = int(item_id) & 0xFFFFFFFF
+            if SLOT_ENTITLEMENT_MIN <= item_id <= SLOT_ENTITLEMENT_MAX:
+                raise ValueError(
+                    "purchased Ludus slot entitlements cannot be removed while "
+                    "the server is running; edit the profile offline instead"
+                )
+            if item_id not in set(self.data["owned_items"]):
+                raise ValueError(f"item {item_id} is not owned")
+            self.data["owned_items"] = [
+                item for item in self.data["owned_items"] if item != item_id
+            ]
+            self.data["item_quantities"].pop(item_id, None)
+            self._save()
+            log(f"*** Control remove item={item_id} ***")
+            return item_id
+
+    def set_item_quantity(self, item_id, quantity):
+        """Set a consumable's persisted uses; only owned items hold a count."""
+        with self.lock:
+            item_id = int(item_id) & 0xFFFFFFFF
+            if item_id == STORE_REFRESH_SENTINEL:
+                raise ValueError(
+                    f"{STORE_REFRESH_SENTINEL} is the store-refresh command, "
+                    "not an item"
+                )
+            if item_id not in set(self.data["owned_items"]):
+                raise ValueError(f"item {item_id} is not owned; add it first")
+            quantity = int(quantity)
+            if not 0 <= quantity <= 99:
+                raise ValueError("item quantity must be between 0 and 99")
+            self.data["item_quantities"][item_id] = quantity
+            self._save()
+            log(f"*** Control set item={item_id} quantity={quantity} ***")
+            return quantity
 
     def requested_owned_items(self, requested):
         with self.lock:
@@ -1212,15 +1312,84 @@ _USERSTORAGE_CAPTURE_COUNTER = 0
 _PLAYER_CONTEXT_BY_HOST = {}
 _PLAYER_CONTEXT_LOCK = threading.Lock()
 
+# The launcher clears this (before importing this module) unless --verbose was
+# given. Detail lines then still reach the log file, byte-for-byte unchanged,
+# but the console shows only the short user-facing event stream.
+CONSOLE_DETAIL = os.environ.get("SPARTACUS_CONSOLE_DETAIL", "1") not in ("", "0")
+
+# The game opens two PRUDP sessions (auth and secure). Count them so the user
+# view says "connected" once and "disconnected" when the last session ends.
+_CLIENT_SESSION_COUNT = 0
+_CLIENT_SESSION_LOCK = threading.Lock()
+
+# The game only starts its native save enumeration (UserStorage m21 for the
+# profile/campaign/roster types) after the required compatibility patch has
+# taken the Commerce2 state-26 path and supplied the enumerator's readiness
+# edge. The first such request per game session is therefore the server's
+# evidence that RPCS3 applied the patch; the GUI waits for it after login.
+NATIVE_SAVE_TYPES = frozenset({0x80000001, 0x80000002, 0x80000003})
+_PATCH_CONFIRMED = False
+
+
+def note_native_save_enumeration(type_id):
+    """Emit ``patch_confirmed`` once per session on the first native m21."""
+    global _PATCH_CONFIRMED
+    if type_id not in NATIVE_SAVE_TYPES:
+        return False
+    with _CLIENT_SESSION_LOCK:
+        if _PATCH_CONFIRMED:
+            return False
+        _PATCH_CONFIRMED = True
+    user_events.emit(
+        "patch_confirmed",
+        "Compatibility patch active - the game is loading its saves")
+    return True
+
+
+def _note_client_session(connected):
+    """Emit one user event on the first connect / final disconnect."""
+    global _CLIENT_SESSION_COUNT, _PATCH_CONFIRMED
+    with _CLIENT_SESSION_LOCK:
+        before = _CLIENT_SESSION_COUNT
+        _CLIENT_SESSION_COUNT = max(0, before + (1 if connected else -1))
+        after = _CLIENT_SESSION_COUNT
+        if connected and before == 0:
+            _PATCH_CONFIRMED = False
+    if connected and before == 0 and after > 0:
+        user_events.emit("connected", "Game connected")
+    elif not connected and before > 0 and after == 0:
+        user_events.emit("disconnected", "Game disconnected")
+
 
 def log(msg):
     ts = datetime.datetime.now().strftime("%H:%M:%S.%f")
     prefix = getattr(_LOG_CONTEXT, "prefix", "prudp")
     line = f"[{ts}] [{prefix}] {msg}"
     with _LOG_LOCK:
-        print(line, flush=True)
+        if CONSOLE_DETAIL:
+            print(line, flush=True)
         with open(LOG_PATH, "a", encoding="utf-8", errors="replace") as f:
             f.write(line + "\n")
+
+
+def encode_balance_pair(gold, silver):
+    """Absolute gold/silver pair sent by m6, m11 and the m13 balance shape."""
+    return struct.pack("<II", gold, silver)
+
+
+def emit_balance_synced(gold, silver=None, fame=None):
+    """Tell the user the absolute balances a Monetization reply carried."""
+    fields = {"gold": gold}
+    parts = [f"{gold} gold"]
+    if silver is not None:
+        fields["silver"] = silver
+        parts.append(f"{silver} silver")
+    if fame is not None:
+        fields["fame"] = fame
+        parts.append(f"{fame} fame")
+    user_events.emit(
+        "balance_synced", "Balance synced: " + ", ".join(parts), **fields)
+
 
 
 def capture_userstorage_request(rmc, packet_info, peer, session_state=None):
@@ -1915,6 +2084,7 @@ def main(port=None, stop_event=None, ready_event=None, host="0.0.0.0"):
                 with state_lock:
                     # A reconnect reuses the same UDP address/vport key. Let
                     # the new session schedule its own one-shot push.
+                    new_session = conn_key not in connection_state
                     notification_scheduled.discard(conn_key)
                     connection_state[conn_key] = {
                         "addr": addr,
@@ -1944,6 +2114,8 @@ def main(port=None, stop_event=None, ready_event=None, host="0.0.0.0"):
                 srv.sendto(resp, addr)
                 log("-> CONNECT|ACK" +
                     (" + challenge response" if reply_payload else ""))
+                if new_session:
+                    _note_client_session(True)
 
             elif info["type"] == TYPE_PING:
                 resp = build(src, dst, TYPE_PING, FLAG_ACK, sess, seq,
@@ -2095,6 +2267,11 @@ def main(port=None, stop_event=None, ready_event=None, host="0.0.0.0"):
                                 auth_state["account_pid"] = acct_pid
                         log(f"   *** Login request for user {username!r} "
                             f"-> pid=0x{acct_pid:x} pwd={acct_pwd!r} ***")
+                        if acct_pid != TRACKING_PID:
+                            # The Tracking service logs in too; that is
+                            # analytics plumbing, not the player.
+                            user_events.emit(
+                                "logged_in", f"Logged in as {username_text}")
                         resp_body = build_login_response(acct_pid, SERVER_PID)
                         label = "LOGIN"
                     elif rmc["method_id"] == 3:        # RequestTicket
@@ -2180,6 +2357,7 @@ def main(port=None, stop_event=None, ready_event=None, host="0.0.0.0"):
                         + (f" format={format_version}"
                            if row_count else "")
                         + " ***")
+                    note_native_save_enumeration(type_id)
 
                 elif rmc and rmc["is_request"] \
                         and rmc["protocol"] == PROTO_USER_STORAGE \
@@ -2264,11 +2442,12 @@ def main(port=None, stop_event=None, ready_event=None, host="0.0.0.0"):
                         gold, silver = ECONOMY.add_income(
                             gold_delta, silver_delta
                         )
-                        resp_body = struct.pack("<II", gold, silver)
+                        resp_body = encode_balance_pair(gold, silver)
                         label = "MONETIZATION_INCOME"
                         log(f"   *** Income gold={gold_delta:+d} "
                             f"silver={silver_delta:+d} -> balances "
                             f"gold={gold} silver={silver} ***")
+                        emit_balance_synced(gold, silver)
                     elif rmc["method_id"] == 7:     # Purchase item
                         try:
                             item_id, gold_cost, silver_cost = struct.unpack_from(
@@ -2294,6 +2473,7 @@ def main(port=None, stop_event=None, ready_event=None, host="0.0.0.0"):
                             log(f"   *** Recruit pool refresh gold_cost={gold_cost} "
                                 f"silver_cost={silver_cost} -> balances "
                                 f"gold={gold} silver={silver} ***")
+                            emit_balance_synced(gold, silver)
                         else:
                             gold, silver = ECONOMY.purchase(
                                 item_id, gold_cost, silver_cost
@@ -2311,6 +2491,9 @@ def main(port=None, stop_event=None, ready_event=None, host="0.0.0.0"):
                                 f"gold_cost={gold_cost} "
                                 f"silver_cost={silver_cost} -> balances "
                                 f"gold={gold} silver={silver} ***")
+                            user_events.emit(
+                                "purchase", f"Shop purchase: item {item_id}")
+                            emit_balance_synced(gold, silver)
                     elif rmc["method_id"] == 8:     # Enumerate transactions/server time
                         transactions = ECONOMY.method_8_transactions()
                         resp_body = encode_monetization_server_time(
@@ -2370,11 +2553,12 @@ def main(port=None, stop_event=None, ready_event=None, host="0.0.0.0"):
                         gold, silver = ECONOMY.add_income(
                             gold_delta, silver_delta
                         )
-                        resp_body = struct.pack("<II", gold, silver)
+                        resp_body = encode_balance_pair(gold, silver)
                         label = "MONETIZATION_GLADIATOR_OUTCOME"
                         log(f"   *** Gladiator outcome id={gladiator_id} "
                             f"gold_cost={gold_cost} silver_cost={silver_cost} "
                             f"-> balances gold={gold} silver={silver} ***")
+                        emit_balance_synced(gold, silver)
                     elif rmc["method_id"] == 12:    # Record gladiator death
                         try:
                             gladiator_id = struct.unpack_from(
@@ -2433,6 +2617,8 @@ def main(port=None, stop_event=None, ready_event=None, host="0.0.0.0"):
                             f"category={category} "
                             f"gold_cost={gold_cost} silver_cost={silver_cost} "
                             f"shape={shape} -> balances gold={gold} silver={silver} ***")
+                        if shape != "empty":
+                            emit_balance_synced(gold, silver)
                     elif rmc["method_id"] == 15:    # Replace gladiator perk
                         # Live-traced (2026-08-12): the Ludus perk swap sends
                         #   u32 gladiator_id, u32 perk_id, i32 gold_cost
@@ -2472,6 +2658,7 @@ def main(port=None, stop_event=None, ready_event=None, host="0.0.0.0"):
                         label = "MONETIZATION_REWARD_BALANCES"
                         log(f"   *** Reward balances gold={gold} "
                             f"silver={silver} fame={fame} ***")
+                        emit_balance_synced(gold, silver, fame)
                     elif rmc["method_id"] == 20:    # Deposit fight rewards (01.06)
                         # Recovered from the 01.06 client on 2026-08-26:
                         # request stub 0x0003F0E0 serializes three i32 values;
@@ -2493,6 +2680,7 @@ def main(port=None, stop_event=None, ready_event=None, host="0.0.0.0"):
                             f"silver={silver_delta:+d} fame={fame_delta:+d} "
                             f"-> balances gold={gold} silver={silver} "
                             f"fame={fame} ***")
+                        emit_balance_synced(gold, silver, fame)
                     elif rmc["method_id"] == 24:    # Enumerate Shop records (01.06)
                         # Parser case 0x00043918 calls the structured-list
                         # decoder at 0x0054F638.  The post-load roster validator
@@ -2584,6 +2772,11 @@ def main(port=None, stop_event=None, ready_event=None, host="0.0.0.0"):
                         log(f"   *** replying [{shape}] to avoid a client hang; "
                             f"no currency debited (balances gold={gold} "
                             f"silver={silver}). Please report this method. ***")
+                        if shape in ("gold", "balances", "receipt"):
+                            # These shapes carry the absolute balance(s) the
+                            # client adopts; m14/m15 are parser-proven "gold".
+                            emit_balance_synced(
+                                gold, silver if shape != "gold" else None)
 
                 elif rmc and rmc["is_request"] \
                         and rmc["protocol"] == PROTO_TOURNAMENT \
@@ -2917,10 +3110,13 @@ def main(port=None, stop_event=None, ready_event=None, host="0.0.0.0"):
                 log("-> DISCONNECT|ACK")
                 with state_lock:
                     conn_key = (addr, info["source"])
+                    closed_session = conn_key in connection_state
                     connection_state.pop(conn_key, None)
                     notification_scheduled.discard(conn_key)
                     if not any(key[0] == addr for key in connection_state):
                         account_context_by_peer.pop(addr, None)
+                if closed_session:
+                    _note_client_session(False)
             else:
                 log(f"   (no handler for {tname})")
     except KeyboardInterrupt:
