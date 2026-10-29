@@ -1,12 +1,27 @@
-# Current AI handoff — v0.6.5 release checkpoint
+# Current AI handoff — v0.7.0 release checkpoint
 
-## Unreleased: Qt frontend branch
+## v0.7.0 release (2026-10-29)
 
-Branch `feature/qt-frontend-adaptive-patch` (not committed, not released).
-Working-tree implementation of `notes/22-qt-frontend-and-adaptive-patch-plan.md`;
-see `notes/24-implementation-log.md` for the per-phase record.
+Released as GitHub release `v0.7.0` (Latest) from `main` at commit `c0db99b`
+(tag `v0.7.0`; the same commit is on `feature/qt-frontend-adaptive-patch`).
+Built with `packaging\build_release.ps1` from that commit:
 
-Implemented and automated-tested:
+| Artifact | SHA-256 |
+| --- | --- |
+| `SpartacusLegends-Preservation-v0.7.0.zip` (64,425,181 bytes) | `85C19D5D967D635825594227A5FB95C00B8668FC1B9309B851D1C97047249462` |
+| `SpartacusLegendsServerGUI.exe` (one-folder, with `SpartacusLegendsServerGUI_runtime\`) | `D2C17276E8A8078CE3C34F4998F82B1256D5C3800A0762F02961B1B026008DAC` |
+| `SpartacusLegendsServer.exe` | `AE9D3195263A41C7084DC51B3E31BB7A85239077DD1F0E83E9F06D0EF180CE19` |
+| `SpartacusLegendsPatchInstaller.exe` | `94624DC4DF0AC06C3DBE07E1B4CD42074D8587D4B9BE1D805D72AA7C6D368A67` |
+
+GitHub's asset digest matches the local ZIP. The ZIP contains only the three
+exes, the GUI runtime folder, the patch YAML, README and MIGRATION_GUIDE.
+The distributed patch YAMLs are unchanged from v0.6.5 and byte-identical.
+431 automated tests pass at normal and Low integrity.
+
+Design: `notes/22-qt-frontend-and-adaptive-patch-plan.md`; per-phase record
+`notes/24-implementation-log.md` (both local-only, ignored by Git).
+
+Release contents (implemented and automated-tested):
 
 - User-facing event stream (`tools/user_events.py`) with a plain console view
   by default and `--verbose` for the full detail trace; log files are unchanged.
@@ -132,22 +147,28 @@ Packaging corrections (2026-10-29):
   part-way failure (`InstallWriteError`). Test live builds from a copy
   outside the repo.
 
-Unverified live (requires Jake):
+Live-proven on 2026-10-29: the adaptive patch on the variant dump (cold
+boot, patch applied, game worked); that install after the 01.06 update (its
+EBOOT became byte-identical to the reference 01.06, so the shipped 01.06
+section applies, `(<- 6)`).
 
+Still unverified live on the released build:
+
+- The AGENTS.md two-cold-boot persistence regression on the v0.7.0 package.
 - Live gold/silver sync after a fight or shop purchase, and the following
-  native autosave containing the edited values.
-- A cold-boot restore after an offline edit.
-- Live item/boost edits (labelled experimental); live fame on 01.06.
-- The 01.06 save editor and the redesigned GUI on the packaged exe.
-- The variant install after the 01.06 update (next test).
+  native autosave containing the edited values; live fame on 01.06.
+- A cold-boot restore after an offline edit (01.00 and 01.06).
+- Live item/boost edits (labelled experimental).
+- The redesigned GUI and the Patch setup flow on the packaged exe, including
+  the first-run page, the patch-not-confirmed return, and the wrong-folder
+  confirmation.
 
-Live tests Jake must run: build/start server + GUI from source first; connect a
-cold-booted game; change gold/silver live; win one fight (m6) or buy one shop
-item (m7) and confirm the on-screen values match; return to the Ludus, wait
-~20 s, close RPCS3; confirm exact-size native PUTs; cold-boot and confirm the
-values persist. For adaptive: use a non-reference variant ELF if available,
-install with `--adaptive`, check the generated report and PPU section, then
-cold-boot login and native restore.
+Run live tests from a copy of the release outside the repo (for example the
+Desktop): the repo folder's Low integrity label makes anything started from
+`.build\` or `dist\` run at Low integrity. Then: cold-boot the game; change
+gold/silver live; win one fight (m6) or buy one shop item (m7) and confirm the
+on-screen values; return to the Ludus, wait ~20 s, close RPCS3; confirm
+exact-size native PUTs; cold-boot and confirm the values persist.
 
 ## 2026-09-05 boost refill fix (packaged live validation passed; released as v0.6.5)
 
@@ -220,7 +241,7 @@ git log -3 --oneline --decorate
 python -m unittest discover -s tests -p 'test_*.py'
 ```
 
-## Current release
+## v0.6.3 release (historical)
 
 Version `0.6.3` is the PRUDP fragmentation hotfix for `0.6.2`. Shop method 8
 responses larger than 962 logical bytes are split into acknowledged DATA
