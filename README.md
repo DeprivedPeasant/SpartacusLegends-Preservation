@@ -527,6 +527,16 @@ files beneath `data\usercontent` exist at the exact sizes listed above. Inspect
 entries during the next login. RPCS3 IPC and PINE are not involved in normal
 v0.4 persistence.
 
+**The server says "Progress NOT saved: the game is version 01.06 but the
+server is set to 01.00" (or the reverse).** The game was updated or downgraded
+without the server's version following it. Close RPCS3, stop the server, and
+run Patch setup again (or start the server with `--title-version`). Each version
+keeps its saves in its own folder: 01.00 in `data\usercontent`, 01.06 in
+`data\usercontent\01.06`. Since v0.7.1 the server refuses the other version's
+saves instead of storing them in the wrong folder; before that, a save stored
+there blocks every later upload until it is moved into its own version's
+folder.
+
 **A v0.3.x roster or campaign is missing after upgrading.** Normal v0.4 startup
 does not import `roster.json` or `campaign.json`. Restore your backed-up folder
 and follow the upgrade warning above; do not allow a new fallback roster to

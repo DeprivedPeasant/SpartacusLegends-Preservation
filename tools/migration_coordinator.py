@@ -133,6 +133,27 @@ def native_objects(title_version=DEFAULT_TITLE_VERSION) -> dict:
     return NATIVE_OBJECTS_BY_VERSION[coerce_title_version(title_version)]
 
 
+def writer_build_for_size(type_id: int, size: int,
+                          title_version=DEFAULT_TITLE_VERSION
+                          ) -> "TitleVersion | None":
+    """Another build whose writer produces ``size`` that this build rejects.
+
+    A 01.06 game talking to a server set to 01.00 uploads 01.06-sized objects;
+    naming that build turns an opaque size rejection into a version mismatch
+    the user can fix.  Returns None when ``title_version`` accepts the size or
+    no other supported build writes it.
+    """
+    current = coerce_title_version(title_version)
+    info = native_objects(current).get(type_id)
+    if info is None or info.accepts(size):
+        return None
+    for version, objects in NATIVE_OBJECTS_BY_VERSION.items():
+        other = objects.get(type_id)
+        if version is not current and other is not None                 and other.expected_size == size:
+            return version
+    return None
+
+
 def native_content_dir(data_dir: Path,
                        title_version=DEFAULT_TITLE_VERSION) -> Path:
     """Authoritative UserStorage root for one build.
@@ -205,6 +226,8 @@ class UploadDecision:
     retryable: bool = False
     state: str = ""
     reason: str = ""
+    # The build that writes this size when the server is set to another one.
+    writer_build: str = ""
 
 
 class UploadGate:
@@ -263,10 +286,16 @@ class UploadGate:
         if length not in accepted:
             wanted = (f"exactly {accepted[0]}" if len(accepted) == 1
                       else "one of " + ", ".join(str(s) for s in accepted))
+            writer = writer_build_for_size(type_id, length,
+                                           self.title_version)
+            reason = (f"invalid length {length} for type 0x{type_id:08X}; "
+                      f"expected {wanted}")
+            if writer is not None:
+                reason += (f" (written by game version {writer.value}; the "
+                           f"server is set to {self.title_version.value})")
             return UploadDecision(
-                False, False, state.value,
-                f"invalid length {length} for type 0x{type_id:08X}; "
-                f"expected {wanted}")
+                False, False, state.value, reason,
+                writer_build=writer.value if writer is not None else "")
         if state is ObjectState.BLOCKED:
             return UploadDecision(
                 False, False, state.value,
@@ -381,12 +410,21 @@ def evaluate_installation(data_dir: Path,
                     native_sha256=native_sha256(native_path),
                     detail="valid native object")
             else:
+                writer = writer_build_for_size(type_id, size, title_version)
+                if writer is not None:
+                    detail = (f"{native_path} was written by game version "
+                              f"{writer.value}, but the server is set to "
+                              f"{title_version.value}; set the server to "
+                              f"{writer.value} or move that save into the "
+                              f"{writer.value} folder")
+                else:
+                    detail = (f"malformed native object: expected "
+                              f"{_size_text(info)}, found {size}; "
+                              f"recovery condition, not treated as absent")
                 report.assessments[type_id] = TypeAssessment(
                     type_id, ObjectState.BLOCKED,
                     native_path=native_path, native_size=size,
-                    detail=f"malformed native object: expected "
-                           f"{_size_text(info)}, found {size}; "
-                           f"recovery condition, not treated as absent")
+                    detail=detail)
             continue
 
         # Legacy JSON/PINE captures were produced by 01.00 and its restore

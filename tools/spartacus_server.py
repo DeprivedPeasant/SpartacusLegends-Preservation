@@ -607,6 +607,13 @@ def main() -> int:
                          stop_event, ready_http)
     if migration is not None and migration.gate is not None:
         onlineconfig_args += (migration.gate,)
+    else:
+        # No migration: still refuse objects the configured build does not
+        # write, so a game on another version can never overwrite this
+        # build's saves with a layout the next startup has to block.
+        import migration_coordinator
+        onlineconfig_args += (migration_coordinator.UploadGate(
+            title_version=args.title_version),)
 
     components = [
         ("OnlineConfig", spartacus_onlineconfig.serve, onlineconfig_args),

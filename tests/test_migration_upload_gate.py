@@ -7,6 +7,7 @@ import sys
 import tempfile
 import threading
 import unittest
+from unittest import mock
 from http.server import ThreadingHTTPServer
 
 TOOLS = Path(__file__).resolve().parents[1] / "tools"
@@ -21,6 +22,7 @@ PROFILE_TYPE = 0x80000001
 CAMPAIGN_TYPE = 0x80000002
 ROSTER_TYPE = 0x80000003
 SIZES = {PROFILE_TYPE: 0x1238, CAMPAIGN_TYPE: 0x1804, ROSTER_TYPE: 0x53C4}
+SIZES_106 = {PROFILE_TYPE: 0x15B8, CAMPAIGN_TYPE: 0x1C04, ROSTER_TYPE: 0x53C8}
 
 
 class NullLog:
@@ -95,6 +97,38 @@ class UploadGateTests(unittest.TestCase):
         # rule applies to it; the pending profile is freely uploadable.
         self.assertTrue(gate.check(ROSTER_TYPE, SIZES[ROSTER_TYPE]).allowed)
         self.assertTrue(gate.check(PROFILE_TYPE, SIZES[PROFILE_TYPE]).allowed)
+
+
+class BuildMismatchTests(unittest.TestCase):
+    """A game on one version uploading to a server set to the other."""
+
+    def test_01_06_objects_on_a_01_00_server_name_the_writer_build(self):
+        gate = mc.UploadGate(title_version="01.00")
+        for type_id, size in SIZES_106.items():
+            decision = gate.check(type_id, size)
+            self.assertFalse(decision.allowed)
+            self.assertFalse(decision.retryable)
+            self.assertEqual(decision.writer_build, "01.06")
+            self.assertIn("server is set to 01.00", decision.reason)
+
+    def test_01_00_campaign_on_a_01_06_server_names_01_00(self):
+        gate = mc.UploadGate(title_version="01.06")
+        decision = gate.check(CAMPAIGN_TYPE, SIZES[CAMPAIGN_TYPE])
+        self.assertFalse(decision.allowed)
+        self.assertEqual(decision.writer_build, "01.00")
+
+    def test_sizes_the_build_reads_forward_are_not_a_mismatch(self):
+        # 01.06 admits the 01.00 profile and roster layouts.
+        gate = mc.UploadGate(title_version="01.06")
+        self.assertTrue(gate.check(PROFILE_TYPE, SIZES[PROFILE_TYPE]).allowed)
+        self.assertTrue(gate.check(ROSTER_TYPE, SIZES[ROSTER_TYPE]).allowed)
+        self.assertIsNone(mc.writer_build_for_size(
+            ROSTER_TYPE, SIZES[ROSTER_TYPE], "01.06"))
+
+    def test_unrelated_wrong_size_names_no_build(self):
+        decision = mc.UploadGate().check(ROSTER_TYPE, 17)
+        self.assertFalse(decision.allowed)
+        self.assertEqual(decision.writer_build, "")
 
 
 class HttpUploadGateTests(unittest.TestCase):
@@ -173,6 +207,27 @@ class HttpUploadGateTests(unittest.TestCase):
         self.assertEqual(self.put(ROSTER_TYPE, body), 200)
         self.assertEqual(self.native_path(ROSTER_TYPE).read_bytes(), body)
         self.assertIs(self.gate.state(ROSTER_TYPE), mc.ObjectState.CAPTURED)
+
+    def test_mismatched_build_is_refused_and_reported_once(self):
+        with mock.patch.object(soc.user_events, "emit") as emit:
+            for _ in range(3):
+                status = self.put(ROSTER_TYPE,
+                                  b"\x00" * SIZES_106[ROSTER_TYPE])
+                self.assertEqual(status, 400)
+        self.assertFalse(self.native_path(ROSTER_TYPE).exists())
+        self.assertEqual(emit.call_count, 1)
+        kind, message = emit.call_args.args
+        self.assertEqual(kind, "error")
+        self.assertIn("NOT saved", message)
+        self.assertIn("game is version 01.06", message)
+        self.assertIn("server is set to 01.00", message)
+
+    def test_deferred_upload_is_not_reported_as_an_error(self):
+        self.gate.set_state(ROSTER_TYPE, mc.ObjectState.PENDING)
+        with mock.patch.object(soc.user_events, "emit") as emit:
+            self.assertEqual(
+                self.put(ROSTER_TYPE, b"\x00" * SIZES[ROSTER_TYPE]), 503)
+        emit.assert_not_called()
 
     def test_without_a_gate_length_validation_is_unchanged(self):
         server = ThreadingHTTPServer(

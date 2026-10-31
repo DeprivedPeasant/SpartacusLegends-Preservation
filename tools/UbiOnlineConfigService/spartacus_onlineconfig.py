@@ -127,6 +127,34 @@ def make_handler(rdv_host: str, rdv_port: int, service_log: ServiceLog,
     response_body = make_response(rdv_host, rdv_port)
     remote_config_body = make_remote_config_response()
     user_content_dir = Path(user_content_dir)
+    # A refused save repeats on every autosave; tell the user once per object
+    # type and cause rather than flooding the activity feed.
+    refusals_reported = set()
+    refusals_lock = threading.Lock()
+
+    def report_refusal(type_id: int, decision) -> None:
+        key = (type_id, decision.writer_build or decision.state)
+        with refusals_lock:
+            if key in refusals_reported:
+                return
+            refusals_reported.add(key)
+        name = NATIVE_OBJECT_NAMES.get(type_id, f"object 0x{type_id:08x}")
+        if decision.writer_build:
+            server_build = getattr(upload_gate, "title_version", None)
+            server_text = getattr(server_build, "value", "another version")
+            user_events.emit(
+                "error",
+                f"Progress NOT saved ({name}): the game is version "
+                f"{decision.writer_build} but the server is set to "
+                f"{server_text}. Close RPCS3, stop the server, and run Patch "
+                f"setup again (or start the server with --title-version "
+                f"{decision.writer_build}).",
+                type_id=type_id, writer_build=decision.writer_build)
+        elif not decision.retryable:
+            user_events.emit(
+                "error",
+                f"Progress NOT saved ({name}): {decision.reason}.",
+                type_id=type_id)
 
     class OnlineConfigHandler(BaseHTTPRequestHandler):
         server_version = "SpartacusOnlineConfig/1.0"
@@ -182,6 +210,7 @@ def make_handler(rdv_host: str, rdv_port: int, service_log: ServiceLog,
                                 f"length={length} state={decision.state}: "
                                 f"{decision.reason}"
                             )
+                            report_refusal(type_id, decision)
                             self._send_body(status, b"")
                             return
                     body = self.rfile.read(length)

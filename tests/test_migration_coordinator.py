@@ -161,6 +161,19 @@ class MalformedNative(unittest.TestCase):
             # Other types stay independent.
             self.assertEqual(report.pending_types,
                              [0x80000001, 0x80000002])
+            self.assertIn("malformed", a3.detail)
+
+    def test_other_build_save_in_this_folder_names_the_mismatch(self):
+        # A 01.06 game that saved through a server set to 01.00 leaves 01.06
+        # objects in the 01.00 folder; say so instead of "malformed".
+        with TempInstall() as install:
+            install.write_native(0x80000003, size=0x53C8)
+            report = install.report()
+            a3 = report.assessments[0x80000003]
+            self.assertIs(a3.state, mc.ObjectState.BLOCKED)
+            self.assertIn("written by game version 01.06", a3.detail)
+            self.assertIn("server is set to 01.00", a3.detail)
+            self.assertNotIn("malformed", a3.detail)
 
     def test_blocked_native_file_is_preserved(self):
         with TempInstall() as install:

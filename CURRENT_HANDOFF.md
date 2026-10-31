@@ -1,4 +1,38 @@
-# Current AI handoff — v0.7.0 release checkpoint
+# Current AI handoff — v0.7.1 release checkpoint
+
+## v0.7.1 release (2026-10-31)
+
+Bug-fix release on top of v0.7.0, released as GitHub release `v0.7.1` from
+`main` (tag `v0.7.1`). Built with `packaging\build_release.ps1`:
+
+| Artifact | SHA-256 |
+| --- | --- |
+| `SpartacusLegends-Preservation-v0.7.1.zip` (64,430,570 bytes) | `16E39A1E9A61E00642FF387BA407A8FBA4942DB5EAC819CE890CE39B92B341B1` |
+| `SpartacusLegendsServerGUI.exe` | `A8BD7E9857F5BF3716246D3234CB29A3F3EA7162ED980D0FB39D45FA57063ABA` |
+| `SpartacusLegendsServer.exe` | `F9ED66AC1B131CDDC6EF91591DF1F95FBEDEB279140E340924CB0E4D117F51BB` |
+| `SpartacusLegendsPatchInstaller.exe` | `F288E392BB390067CC759AC34AD695CE763F489649E5DE19458FCD4165644725` |
+
+User report (2026-10-31): "none of my gladiators save". Their logs showed the
+game updated to 01.06 while the server was still set to 01.00. With no
+migration active the HTTP handler accepted any size, so the 01.06 objects
+(0x15B8/0x1C04/0x53C8) were stored in the 01.00 folder `data\usercontent`.
+Every later startup assessed them as malformed 01.00 objects (BLOCKED) and
+rejected all uploads, visible only in `online_config.log`. Their progress was
+recovered by moving the objects into `data\usercontent\01.06` and copying
+`profile.json` to `profile-01.06.json`.
+
+Fix:
+
+- `migration_coordinator.writer_build_for_size()` names the other build that
+  writes a rejected size; `UploadDecision.writer_build` carries it, and a
+  BLOCKED assessment for such a file says which version wrote it.
+- `spartacus_server.py` always installs a size-only `UploadGate` for the
+  configured build when no migration gate exists, so another version's
+  objects are refused rather than stored.
+- The HTTP handler emits one user `error` event per object type and cause for
+  a refused (non-deferred) upload, naming the version mismatch when known.
+- 438 automated tests pass. Not yet live-tested: a real 01.06 client against a
+  01.00 server now gets the refusal message instead of corrupting the folder.
 
 ## v0.7.0 release (2026-10-29)
 
