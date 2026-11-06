@@ -3,7 +3,7 @@
 ## v0.7.2 release (2026-11-06)
 
 Bug-fix release on top of v0.7.1, released as GitHub release `v0.7.2` from
-`main` (tag `v0.7.2`). Built with `packaginguild_release.ps1`:
+`main` (tag `v0.7.2`). Built with `packaging\build_release.ps1`:
 
 | Artifact | SHA-256 |
 | --- | --- |
@@ -31,7 +31,7 @@ RPCS3 folder, records the version when none is known, offers to switch on a
 mismatch, and otherwise sends the user to Patch setup.
 
 449 automated tests pass (15 GUI tests skip on system Python and pass in
-`.buildenv`). The packaged server was checked in an empty folder: it refuses
+`.build\venv`). The packaged server was checked in an empty folder: it refuses
 to start and `--check` still runs. Not live-tested: the GUI Start flow against
 a real RPCS3 install, or a game boot.
 
