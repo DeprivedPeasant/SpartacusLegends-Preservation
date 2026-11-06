@@ -63,6 +63,8 @@ class ServerTab(QWidget):
         self.setObjectName("page")
         self.process = process
         self.base_dir = Path(base_dir)
+        # Called with the selected version before starting; False stays stopped.
+        self.start_guard = None
 
         self.version_combo = QComboBox()
         self.version_combo.addItems(["01.00", "01.06"])
@@ -170,6 +172,9 @@ class ServerTab(QWidget):
 
     # ------------------------------------------------------------- actions
     def _start(self) -> None:
+        if self.start_guard is not None \
+                and not self.start_guard(self.selected_title_version()):
+            return
         self.process.start(self.selected_title_version())
 
     def _stop(self) -> None:

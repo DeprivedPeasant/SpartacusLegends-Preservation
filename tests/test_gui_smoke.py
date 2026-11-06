@@ -25,6 +25,8 @@ except ImportError:  # PySide6 is optional for a headless test run.
     QApplication = None
     QColor = None
 
+import server_config
+
 
 @unittest.skipIf(QApplication is None, "PySide6 is not installed")
 class GuiSmokeTests(unittest.TestCase):
@@ -85,6 +87,88 @@ class GuiSmokeTests(unittest.TestCase):
                 self.assertFalse(window.patch_tab.install_button.isEnabled())
             finally:
                 window.close()
+
+    def start_with(self, app, detected, answer=None):
+        """Press Start with RPCS3 reporting ``detected``; never binds a port."""
+        from server_gui import main_window as module
+
+        window = module.MainWindow(base_dir=app)
+        self.addCleanup(window.close)
+        window.nav.setCurrentRow(0)
+        window.patch_tab.rpcs3_root = lambda: Path("rpcs3")
+        with mock.patch.object(window.process, "start") as start, \
+                mock.patch.object(module.patch_installer,
+                                  "detected_game_version",
+                                  return_value=detected), \
+                mock.patch.object(module.QMessageBox, "question",
+                                  return_value=answer) as question:
+            window.server_tab._start()
+        return window, start, question
+
+    def test_start_refuses_to_guess_the_version(self):
+        from server_gui.main_window import PATCH_PAGE
+
+        with tempfile.TemporaryDirectory() as temp:
+            app = Path(temp)
+            window, start, _question = self.start_with(app, None)
+            start.assert_not_called()
+            self.assertEqual(window.nav.currentRow(), PATCH_PAGE)
+            self.assertIn("Which version", window.patch_tab.attention
+                          .heading.text())
+            self.assertFalse((app / "data" / "server-config.json").exists())
+
+    def test_start_records_the_version_found_in_rpcs3(self):
+        with tempfile.TemporaryDirectory() as temp:
+            app = Path(temp)
+            _window, start, question = self.start_with(app, "01.06")
+            start.assert_called_once_with("01.06")
+            question.assert_not_called()
+            self.assertEqual(
+                server_config.read_title_version(
+                    server_config.config_path(app)), "01.06")
+
+    def write_config(self, app, title_version):
+        config = server_config.config_path(app)
+        config.parent.mkdir(parents=True)
+        config.write_text(server_config.encode_title_version(title_version),
+                          encoding="utf-8")
+
+    def test_start_offers_to_follow_a_game_update(self):
+        from PySide6.QtWidgets import QMessageBox
+
+        with tempfile.TemporaryDirectory() as temp:
+            app = Path(temp)
+            self.write_config(app, "01.00")
+            _window, start, question = self.start_with(
+                app, "01.06", QMessageBox.Yes)
+            question.assert_called_once()
+            start.assert_called_once_with("01.06")
+            self.assertEqual(
+                server_config.read_title_version(
+                    server_config.config_path(app)), "01.06")
+
+    def test_start_can_keep_the_set_version_or_cancel(self):
+        from PySide6.QtWidgets import QMessageBox
+
+        for answer, started in ((QMessageBox.No, True),
+                                (QMessageBox.Cancel, False)):
+            with tempfile.TemporaryDirectory() as temp:
+                app = Path(temp)
+                self.write_config(app, "01.00")
+                _window, start, _question = self.start_with(
+                    app, "01.06", answer)
+                self.assertEqual(start.called, started)
+                self.assertEqual(
+                    server_config.read_title_version(
+                        server_config.config_path(app)), "01.00")
+
+    def test_start_trusts_the_recorded_version_when_rpcs3_is_unknown(self):
+        with tempfile.TemporaryDirectory() as temp:
+            app = Path(temp)
+            self.write_config(app, "01.06")
+            _window, start, question = self.start_with(app, None)
+            start.assert_called_once_with("01.06")
+            question.assert_not_called()
 
     def test_first_run_opens_patch_setup_until_setup_is_completed(self):
         from server_gui.main_window import MainWindow, PATCH_PAGE

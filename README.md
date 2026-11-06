@@ -537,6 +537,14 @@ saves instead of storing them in the wrong folder; before that, a save stored
 there blocks every later upload until it is moved into its own version's
 folder.
 
+**The server says "The game version is not set".** Patch setup records your
+game version in `data\server-config.json`. Without that file the server uses
+the version your existing saves belong to; on a fresh folder, or when the saves
+do not settle it, it will not start rather than guess. Run Patch setup, or start
+the server with `--title-version 01.00` or `--title-version 01.06`. The app
+reads the version from your RPCS3 folder when you press Start, and offers to
+switch if the game has been updated.
+
 **A v0.3.x roster or campaign is missing after upgrading.** Normal v0.4 startup
 does not import `roster.json` or `campaign.json`. Restore your backed-up folder
 and follow the upgrade warning above; do not allow a new fallback roster to

@@ -149,7 +149,8 @@ def writer_build_for_size(type_id: int, size: int,
         return None
     for version, objects in NATIVE_OBJECTS_BY_VERSION.items():
         other = objects.get(type_id)
-        if version is not current and other is not None                 and other.expected_size == size:
+        if (version is not current and other is not None
+                and other.expected_size == size):
             return version
     return None
 
@@ -165,6 +166,32 @@ def native_content_dir(data_dir: Path,
     version = coerce_title_version(title_version)
     root = Path(data_dir) / "usercontent"
     return root if version is TitleVersion.V100 else root / version.value
+
+
+def title_version_from_saves(data_dir: Path) -> "TitleVersion | None":
+    """The one build the existing saves belong to, or None when they do not say.
+
+    Only used when no version was configured. A save in the wrong build's
+    folder, or valid saves for both builds, leaves the answer to the player.
+    Legacy JSON was only ever written by 01.00.
+    """
+    data_dir = Path(data_dir)
+    found = set()
+    for version, objects in NATIVE_OBJECTS_BY_VERSION.items():
+        for info in objects.values():
+            path = (native_content_dir(data_dir, version) /
+                    f"{info.type_id:08x}" / f"{NATIVE_CONTENT_ID}.bin")
+            try:
+                size = path.stat().st_size
+            except OSError:
+                continue
+            if not info.accepts(size):
+                return None
+            found.add(version)
+    if not found and any(_valid_legacy_json(data_dir, *legacy)
+                         for legacy in LEGACY_FILES.values()):
+        found.add(TitleVersion.V100)
+    return found.pop() if len(found) == 1 else None
 
 
 def _size_text(info: NativeObjectInfo) -> str:

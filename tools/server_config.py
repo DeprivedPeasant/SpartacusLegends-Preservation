@@ -9,6 +9,17 @@ from pathlib import Path
 CONFIG_RELATIVE_PATH = Path("data") / "server-config.json"
 DEFAULT_TITLE_VERSION = "01.00"
 SUPPORTED_TITLE_VERSIONS = ("01.00", "01.06")
+TITLE_VERSION_UNKNOWN_MESSAGE = (
+    "The game version is not set and your saves do not show which one you "
+    "have. Run Patch setup in SpartacusLegendsServerGUI.exe, or "
+    "SpartacusLegendsPatchInstaller.exe, or start the server with "
+    "--title-version 01.00 or --title-version 01.06. The server does not "
+    "guess: the wrong version puts saves in the wrong folder."
+)
+
+
+class TitleVersionUnknownError(ValueError):
+    """Nothing says which build the player has, so the server must not start."""
 
 
 def config_path(base_dir: Path) -> Path:

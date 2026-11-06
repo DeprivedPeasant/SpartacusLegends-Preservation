@@ -17,6 +17,8 @@ import traceback
 from _version import __version__ as VERSION
 from server_config import (
     DEFAULT_TITLE_VERSION,
+    TITLE_VERSION_UNKNOWN_MESSAGE,
+    TitleVersionUnknownError,
     config_path as server_config_path,
     read_title_version,
 )
@@ -256,7 +258,14 @@ def resolve_title_version(cli_value: str | None,
     configured = read_title_version(server_config_path(base_dir))
     if configured is not None:
         return configured, "patch-installer configuration"
-    return DEFAULT_TITLE_VERSION, "01.00 backward-compatible default"
+    # Installs from before the installer recorded a version keep working, but a
+    # fresh folder must not guess: a 01.06 game on a 01.00 server loses saves.
+    import migration_coordinator
+    from_saves = migration_coordinator.title_version_from_saves(
+        Path(base_dir) / "data")
+    if from_saves is not None:
+        return from_saves.value, "existing saves"
+    raise TitleVersionUnknownError(TITLE_VERSION_UNKNOWN_MESSAGE)
 
 
 MIGRATION_TYPE_NAMES = {
@@ -494,6 +503,14 @@ def main() -> int:
     try:
         args.title_version, version_source = resolve_title_version(
             args.title_version, base_dir)
+    except TitleVersionUnknownError as error:
+        if not args.check:
+            print(f"STARTUP ERROR: {error}", file=sys.stderr)
+            maybe_pause(args.no_wait)
+            return 2
+        # --check only tests the ports, which do not depend on the version.
+        args.title_version = DEFAULT_TITLE_VERSION
+        version_source = "not set yet; run Patch setup before starting"
     except ValueError as error:
         print(f"STARTUP ERROR: {error}", file=sys.stderr)
         maybe_pause(args.no_wait)

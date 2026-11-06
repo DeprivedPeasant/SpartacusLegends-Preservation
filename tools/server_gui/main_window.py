@@ -34,11 +34,12 @@ from .server_tab import ServerTab
 from .widgets import button, label
 
 try:
+    import migration_coordinator
     import patch_installer
     import server_config
     from _version import __version__ as VERSION
 except ImportError:  # Imported as tools.server_gui.main_window by tests.
-    from tools import patch_installer, server_config
+    from tools import migration_coordinator, patch_installer, server_config
     from tools._version import __version__ as VERSION
 
 
@@ -63,14 +64,23 @@ PAGES = (
 )
 
 
-def configured_title_version(base_dir: Path) -> str:
-    """The version the patch installer recorded, or the 01.00 default."""
+def known_title_version(base_dir: Path) -> str | None:
+    """The recorded version, else the one the saves prove, else None."""
     try:
         configured = server_config.read_title_version(
             server_config.config_path(base_dir))
     except ValueError:
-        return server_config.DEFAULT_TITLE_VERSION
-    return configured or server_config.DEFAULT_TITLE_VERSION
+        return None
+    if configured is not None:
+        return configured
+    from_saves = migration_coordinator.title_version_from_saves(
+        Path(base_dir) / "data")
+    return from_saves.value if from_saves is not None else None
+
+
+def configured_title_version(base_dir: Path) -> str:
+    """The version to preselect; Start still refuses to run on this default."""
+    return known_title_version(base_dir) or server_config.DEFAULT_TITLE_VERSION
 
 
 class MainWindow(QMainWindow):
@@ -85,6 +95,7 @@ class MainWindow(QMainWindow):
 
         self.server_tab = ServerTab(self.process, self.base_dir,
                                     self.title_version)
+        self.server_tab.start_guard = self._confirm_title_version
         self.player_tab = PlayerTab(self.process, self.base_dir,
                                     self.title_version)
         self.items_tab = ItemsTab(self.process, self.base_dir,
@@ -265,6 +276,61 @@ class MainWindow(QMainWindow):
         combo = self.server_tab.version_combo
         if combo.findText(title_version) >= 0:
             combo.setCurrentText(title_version)
+
+    # ------------------------------------------------------ version check
+    def _detected_game_version(self) -> str | None:
+        root = self.patch_tab.rpcs3_root()
+        if root is None:
+            return None
+        try:
+            return patch_installer.detected_game_version(root)
+        except (OSError, ValueError):
+            return None
+
+    def _remember_title_version(self, title_version: str) -> None:
+        self.server_tab.version_combo.setCurrentText(title_version)
+        path = server_config.config_path(self.base_dir)
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(server_config.encode_title_version(title_version),
+                            encoding="utf-8")
+        except OSError as error:
+            # This start still uses the right version on its command line.
+            self.server_tab._append_event({
+                "kind": "warning",
+                "message": f"Could not record the game version: {error}",
+            })
+
+    def _confirm_title_version(self, selected: str) -> bool:
+        """Start only on a version something vouches for, never the default."""
+        known = known_title_version(self.base_dir)
+        detected = self._detected_game_version()
+        if detected is None:
+            if known is not None:
+                return True
+            self.nav.setCurrentRow(PATCH_PAGE)
+            self.patch_tab.show_attention(
+                "⚠  Which version of the game do you have?",
+                "The server could not tell, and the wrong version puts your "
+                "saves in the wrong folder. Choose your RPCS3 folder and "
+                "press Install / repair setup, then start the server.")
+            return False
+        if known is None:
+            self._remember_title_version(detected)
+            return True
+        if detected == selected:
+            return True
+        answer = QMessageBox.question(
+            self, "Game version mismatch",
+            f"RPCS3 has game version {detected}, but the server is set to "
+            f"{selected}. Saves from the other version are refused, so "
+            f"progress would not be kept.\n\nSwitch the server to {detected}?"
+            f"\n\nEach version keeps its own saves.",
+            QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel,
+            QMessageBox.Yes)
+        if answer == QMessageBox.Yes:
+            self._remember_title_version(detected)
+        return answer != QMessageBox.Cancel
 
     # ------------------------------------------------- patch confirmation
     def _on_server_event(self, event: dict) -> None:

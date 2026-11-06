@@ -15,6 +15,7 @@ from tools.spartacus_server import (
     resolve_title_version,
     running_from_temp,
 )
+from server_config import TitleVersionUnknownError
 from tools.server_config import encode_title_version
 
 
@@ -99,10 +100,65 @@ class TitleSelectionTests(unittest.TestCase):
             self.assertEqual(resolve_title_version("01.00", base),
                              ("01.00", "command-line override"))
 
-    def test_missing_configuration_keeps_v100_compatibility(self):
+    @staticmethod
+    def write_save(base, relative, size):
+        path = base / "data" / "usercontent" / relative / "1.bin"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"\x00" * size)
+
+    def test_fresh_folder_refuses_to_guess_a_version(self):
         with tempfile.TemporaryDirectory() as temp:
-            self.assertEqual(resolve_title_version(None, Path(temp)),
-                             ("01.00", "01.00 backward-compatible default"))
+            with self.assertRaises(TitleVersionUnknownError):
+                resolve_title_version(None, Path(temp))
+
+    def test_a_companion_profile_alone_does_not_decide_the_version(self):
+        # Any earlier run leaves profile.json, whichever version it assumed.
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            (base / "data").mkdir()
+            (base / "data" / "profile.json").write_text("{}", encoding="utf-8")
+            with self.assertRaises(TitleVersionUnknownError):
+                resolve_title_version(None, base)
+
+    def test_existing_01_00_saves_keep_working_without_configuration(self):
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            self.write_save(base, "80000003", 0x53C4)
+            self.assertEqual(resolve_title_version(None, base),
+                             ("01.00", "existing saves"))
+
+    def test_existing_01_06_saves_select_01_06_without_configuration(self):
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            self.write_save(base, "01.06/80000003", 0x53C8)
+            self.assertEqual(resolve_title_version(None, base),
+                             ("01.06", "existing saves"))
+
+    def test_misplaced_saves_do_not_decide_the_version(self):
+        # 01.06 objects in the 01.00 folder: choosing either version without
+        # asking would hide them or block them.
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            self.write_save(base, "80000003", 0x53C8)
+            with self.assertRaises(TitleVersionUnknownError):
+                resolve_title_version(None, base)
+
+    def test_saves_for_both_versions_do_not_decide_the_version(self):
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            self.write_save(base, "80000003", 0x53C4)
+            self.write_save(base, "01.06/80000003", 0x53C8)
+            with self.assertRaises(TitleVersionUnknownError):
+                resolve_title_version(None, base)
+
+    def test_legacy_json_is_01_00(self):
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            (base / "data").mkdir()
+            (base / "data" / "roster.json").write_text(
+                '{"schema_version": 1, "records": []}', encoding="utf-8")
+            self.assertEqual(resolve_title_version(None, base),
+                             ("01.00", "existing saves"))
 
     def test_invalid_configuration_is_rejected(self):
         with tempfile.TemporaryDirectory() as temp:

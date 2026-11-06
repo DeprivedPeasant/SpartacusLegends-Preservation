@@ -1,4 +1,43 @@
-# Current AI handoff — v0.7.1 release checkpoint
+# Current AI handoff — v0.7.2 release checkpoint
+
+## v0.7.2 release (2026-11-06)
+
+Bug-fix release on top of v0.7.1, released as GitHub release `v0.7.2` from
+`main` (tag `v0.7.2`). Built with `packaginguild_release.ps1`:
+
+| Artifact | SHA-256 |
+| --- | --- |
+| `SpartacusLegends-Preservation-v0.7.2.zip` (64,434,680 bytes) | `D169678ACD15A0F54A22570B10FCFDCC7D21D0211D18074B80417BB09EC0BC13` |
+| `SpartacusLegendsServerGUI.exe` | `1043559B24285AB3C26ED7FF07EEC8DDC47AE54FD9F94439548B0A841CC3E2CF` |
+| `SpartacusLegendsServer.exe` | `5EA854BDE5710398A082085E8E5923E80E98DE133F9754A6E38C1BB1790D81DD` |
+| `SpartacusLegendsPatchInstaller.exe` | `56387933275EFFD70F14439BBD8F67D6590DA1D987DE4A3DB5BC702A22D115E1` |
+
+Second report of the same failure (2026-11-06): a 01.06 game on a server in
+01.00 mode because `data\server-config.json` was absent (the log shows the
+01.00 selectors `format=2/1/2`). Users blame the save editor because stopping
+the server to edit is the first restart, which is when the misplaced objects
+become BLOCKED.
+
+The server has never detected the game itself. Since v0.6.0 the installer has
+read PARAM.SFO into the config and the server falls back to 01.00 without it.
+The 0.7.0 GUI made that easier to reach: the Server page opens with 01.00
+selected, always passes `--title-version`, and lets `patch_confirmed` mark
+setup complete without Patch setup having written a config.
+
+Fix: no version is assumed any more. `resolve_title_version` uses the config,
+then `migration_coordinator.title_version_from_saves()`, then refuses to start
+(`--check` still runs). The GUI's Start reads PARAM.SFO through the configured
+RPCS3 folder, records the version when none is known, offers to switch on a
+mismatch, and otherwise sends the user to Patch setup.
+
+449 automated tests pass (15 GUI tests skip on system Python and pass in
+`.buildenv`). The packaged server was checked in an empty folder: it refuses
+to start and `--check` still runs. Not live-tested: the GUI Start flow against
+a real RPCS3 install, or a game boot.
+
+Not handled: a server set to 01.06 does not warn about 01.06 objects left in
+the 01.00 folder; the player sees a fresh game and the files stay untouched
+until moved by hand.
 
 ## v0.7.1 release (2026-10-31)
 
