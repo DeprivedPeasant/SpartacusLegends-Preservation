@@ -54,14 +54,14 @@ You need all four of these. The setup cannot work without them:
   have been live-tested.
 2. **An RPCN account**, created and signed in through RPCS3 under
    **Manage > RPCN > RPCN Account**.
-3. **RPCS3 closed** while you run the installer. RPCS3 rewrites its own
+3. **RPCS3 closed** while you run Patch setup. RPCS3 rewrites its own
    configuration files when it exits, which would undo the setup.
 4. **The release ZIP extracted to a real folder**, for example
    `C:\Games\SpartacusLegends-Preservation`. Do not run the programs from
    inside the ZIP: Windows unpacks them to a temporary folder and later deletes
    it, taking your saved profile, roster and campaign progress with it.
 
-Both programs are unsigned, so Windows SmartScreen shows
+The programs are unsigned, so Windows SmartScreen shows
 **"Windows protected your PC"** the first time you run each one. Choose
 **More info > Run anyway**. Some antivirus tools also flag them, which is a
 known false positive for this kind of packaged Python program. Each release
@@ -70,97 +70,116 @@ download first.
 
 ## Setup
 
-Run these in order. Each step says what you should see.
+Use the app, `SpartacusLegendsServerGUI.exe`. It does everything the two
+console programs do, and it also keeps the game version right, shows when your
+progress is saved, and edits gold, fame and items. Keep it together with its
+`SpartacusLegendsServerGUI_runtime` folder; nothing is unpacked to `%TEMP%`.
+
+The app is available in **English, Spanish and Brazilian Portuguese**. It
+follows your Windows language the first time; change it with the language menu
+at the bottom left (the app restarts to apply it).
 
 **1. Close RPCS3.**
 
-**2. Run `SpartacusLegendsPatchInstaller.exe`.** Either drag your RPCS3 folder
-onto it, or double-click it and paste the path to that folder (the one
-containing `rpcs3.exe`), then confirm.
+**2. Open `SpartacusLegendsServerGUI.exe`.** The first time, it opens on
+**Patch setup**. Choose your RPCS3 folder (the one containing `rpcs3.exe`).
+The game, its version and its executable are found and checked automatically.
+Press **Install / repair setup**; every line of the checklist should then read
+**OK**.
 
-The installer merges the supplied patch entries into RPCS3's imported patches,
-applies the NPUB30746 network configuration, enables the required compatibility
-patch, records the detected game version for the server, and clears the game's
-PPU cache. Existing configuration files are backed up, and unrelated settings
-and optional patch choices are kept. RPCS3 IPC is not required and the
-installer does not change its IPC settings. Run the installer again after
-installing or removing the 01.06 update so the server selects the same build.
+Patch setup merges the supplied patch entries into RPCS3's imported patches,
+applies the NPUB30746 network configuration, enables the required
+compatibility patch, records the game version for the server, and clears the
+game's PPU cache. Existing configuration files are backed up, and unrelated
+settings and optional patch choices are kept. RPCS3 IPC is not required. Run
+it again after installing or removing the 01.06 update.
 
-It then re-reads RPCS3's own files and prints the result. Every line must
-read `[OK]`, ending in:
+A **MISSING** line is something the setup could not write; a **WARNING** line
+is something you need to fix yourself, such as an unsupported game version or
+a missing RPCN account. Fix those before continuing; the game cannot reach the
+main menu otherwise.
 
-```
-SETUP OK. Start SpartacusLegendsServer.exe, then cold-boot the game in RPCS3.
-```
-
-A line marked `[XX]` is something the installer failed to write; a line marked
-`[!!]` is something you need to fix yourself, such as an unsupported game
-version or a missing RPCN account. Fix those before continuing — the game
-cannot reach the main menu otherwise. You can re-check at any time by running
-the installer again with `--verify`, which only reads:
-
-```powershell
-SpartacusLegendsPatchInstaller.exe "C:\path\to\RPCS3" --verify
-```
-
-**3. Run `SpartacusLegendsServer.exe` and leave its window open.** It should
-report:
-
-```
-Port check passed: TCP 80, UDP 21000, UDP 21001
-All services are ready.
-```
-
-Keep this window open for the whole play session. Press Ctrl+C to shut all
-listeners down cleanly when you are finished.
+**3. Go to the Server page and press Start server.** Leave the app open for the
+whole play session. The status reads **Ready** once the server is listening.
 
 **4. Start RPCS3 and cold-boot the game.** Right-click Spartacus Legends and
-choose **Boot with default configuration** or simply start it — do not resume a
+choose **Boot with default configuration** or simply start it; do not resume a
 savestate. Log in normally. The game displays **Saving** and continues to the
-main menu.
+main menu, and the app's status changes to **Game connected**. Its Activity
+list says when your progress is restored and saved.
+
+When you finish, return to the Ludus, wait about 20 seconds for the game's
+autosave, close RPCS3, then press **Stop server**.
 
 To confirm the patch actually applied, open RPCS3's log after booting and look
 for the line beginning `PPU executable hash:`. It must read
 `PPU-81471d050c14f4d20b4027686f8b571dafd32394` for version 01.00 or
 `PPU-131aece6ae8526d13307be925f48c87f73c43799` for version 01.06. A different
 hash means the game build is not the supported one and no patch will apply to
-it.
+it. The app reads this for you under **Patch setup > Last boot**.
 
-## Desktop frontend (optional, experimental)
+### What else the app does
 
-Newer releases also include `SpartacusLegendsServerGUI.exe` with its
-`SpartacusLegendsServerGUI_runtime` folder (keep the two together, beside
-`SpartacusLegendsServer.exe`; nothing is unpacked to `%TEMP%`). It starts and
-stops the same server, shows the session state in words ("Stopped",
-"Starting", "Ready", "Game connected"), lists plain-language events, and can
-show or hide the full detail log. The console `SpartacusLegendsServer.exe`
-remains the supported baseline and behaves exactly as before. Status is always
-spelled out in text as well as colour.
-
-- **Patch setup:** on first run the GUI opens this page. Choose your RPCS3
-  folder; the game, its version and its executable are found automatically.
-  The executable is decrypted from a temporary copy with that RPCS3 and its
-  PPU hash is checked (close RPCS3 first: a second `rpcs3.exe` cannot decrypt
-  while one is open). **Install / repair setup** then writes everything. The
-  page comes back by itself if the game logs in but never starts loading its
-  saves, which means the compatibility patch did not apply.
-- **Player tab, 01.06:** 01.06 keeps gold, silver and fame on the server only
+- **Server page:** shows the session state in words ("Stopped", "Starting",
+  "Ready", "Game connected"), lists plain-language events, and can show or
+  hide the full detail log. Status is always spelled out in text as well as
+  colour. Before it starts, it checks the game version RPCS3 has against the
+  one the server is set to.
+- **Patch setup:** the executable is decrypted from a temporary copy with your
+  RPCS3 and its PPU hash is checked (close RPCS3 first: a second `rpcs3.exe`
+  cannot decrypt while one is open). The page comes back by itself if the game
+  logs in but never starts loading its saves, which means the compatibility
+  patch did not apply.
+- **Player page, server stopped:** edit gold, silver and fame offline. Every
+  save writes a SHA-256-verified backup under `data\backups` first;
+  **Restore backup** rolls it back.
+- **Player page, server running:** gold and silver edits go through the running
+  server and are marked **Pending** until the game adopts them in its next
+  balance-carrying call: in practice after your next fight or shop purchase.
+  The game's own autosave then writes the new values. On 01.00 fame can only
+  be edited offline, with the server stopped.
+- **Player page, 01.06:** 01.06 keeps gold, silver and fame on the server only
   (they are sent to the game at login and after each fight), so the editor
   changes `profile-01.06.json` and never the game's own profile. Fame can be
   edited live on 01.06.
+- **Items page:** owned items, Boost uses and purchased Ludus slots. Live item
+  and Boost-quantity edits are **experimental**: they are expected to appear at
+  the next shop inventory refresh or login, which has not yet been
+  live-validated. Ludus slot entitlements cannot be removed live.
 
-- **Player tab, server stopped:** edit gold, silver, fame and owned items
-  offline. Every save writes a SHA-256-verified backup under `data\backups`
-  first; **Restore backup** rolls it back.
-- **Player tab, server running:** gold and silver edits go through the running
-  server and are marked **Pending** until the game adopts them in its next
-  balance-carrying call — in practice after your next fight or shop purchase.
-  The game's own autosave then writes the new values. **Fame cannot be changed
-  live** (no response in 01.00 or 01.06 pushes fame to the client); edit fame
-  offline with the server stopped.
-- **Items tab:** live item and boost-quantity edits are **experimental**. They
-  are expected to appear at the next shop inventory refresh or login, which has
-  not yet been live-validated. Ludus slot entitlements cannot be removed live.
+### Console programs (advanced)
+
+`SpartacusLegendsServer.exe` and `SpartacusLegendsPatchInstaller.exe` remain
+for scripted and advanced use, such as the command-line options described
+below. They are English only. Double-clicking either one offers to open the
+app instead: press Enter to open it, or type `C` and Enter to stay in the
+console. Any command-line option, including `--console`, skips that question.
+
+The console installer takes the RPCS3 folder as an argument (or asks for it),
+does the same work as **Install / repair setup**, and prints a checklist in
+which every line must read `[OK]`, ending in:
+
+```
+SETUP OK. Start SpartacusLegendsServer.exe, then cold-boot the game in RPCS3.
+```
+
+`[XX]` is something the installer failed to write; `[!!]` is something you need
+to fix yourself. `--verify` only reads and reports:
+
+```powershell
+SpartacusLegendsPatchInstaller.exe "C:\path\to\RPCS3" --verify
+```
+
+The console server reports the following, and must stay open for the whole
+play session; press Ctrl+C to stop it cleanly:
+
+```
+Port check passed: TCP 80, UDP 21000, UDP 21001
+All services are ready.
+```
+
+Do not run the console server and the app's server at the same time: they use
+the same ports and the same saves.
 
 ### Adaptive patching (experimental)
 
@@ -191,7 +210,7 @@ still labelled experimental.
 
 ## Manual setup
 
-Use this only if the installer cannot find your RPCS3 folder. It performs the
+Use this only if Patch setup cannot find your RPCS3 folder. It performs the
 same four changes by hand.
 
 - Open `SpartacusLegends_ServerPatch.yml` in a text editor and save a copy
@@ -569,6 +588,17 @@ The optional Qt frontend needs PySide6 and runs with:
 python -m pip install "PySide6>=6.7,<7"
 python tools\spartacus_gui.py
 ```
+
+Interface text is translated by `tools\i18n.py` from the catalogues in
+`tools	ranslations\`, keyed by the English text. After changing or adding a
+message, update both catalogues and check them:
+
+```powershell
+python scripts\i18n_messages.py
+```
+
+The log files and the console programs stay English, so bug reports read the
+same whatever language a player uses.
 
 To build the standalone Windows release:
 

@@ -27,8 +27,10 @@ try:
     import eboot_source
     import server_control
     import user_events
+    from i18n import N_, tr
 except ImportError:  # Imported as tools.server_gui.server_process by tests.
     from tools import eboot_source, server_control, user_events
+    from tools.i18n import N_, tr
 
 
 EVENT_PREFIX = user_events.MACHINE_PREFIX
@@ -38,12 +40,13 @@ SERVER_EXE_NAME = "SpartacusLegendsServer.exe"
 SERVER_SCRIPT_NAME = "spartacus_server.py"
 STOP_TIMEOUT_MS = 15_000
 
-STATUS_STOPPED = "Stopped"
-STATUS_STARTING = "Starting"
-STATUS_READY = "Ready"
-STATUS_GAME_CONNECTED = "Game connected"
-STATUS_STOPPING = "Stopping"
-STATUS_ERROR = "Error"
+# English status words are also stylesheet states; translate only to show.
+STATUS_STOPPED = N_("Stopped")
+STATUS_STARTING = N_("Starting")
+STATUS_READY = N_("Ready")
+STATUS_GAME_CONNECTED = N_("Game connected")
+STATUS_STOPPING = N_("Stopping")
+STATUS_ERROR = N_("Error")
 
 
 def application_base_dir() -> Path:
@@ -196,9 +199,9 @@ class ServerProcess(QObject):
     def _force_stop(self) -> None:
         if not self.is_running():
             return
-        self.detail_line.emit(
-            f"The server did not stop within {STOP_TIMEOUT_MS // 1000} "
-            "seconds; terminating it now.")
+        self.detail_line.emit(tr(
+            "The server did not stop within {seconds} seconds; terminating "
+            "it now.", seconds=STOP_TIMEOUT_MS // 1000))
         self._process.kill()
 
     # ----------------------------------------------------------- output
@@ -253,9 +256,10 @@ class ServerProcess(QObject):
             self.startup_error.emit(report)
         elif exit_code != 0 and not self._stop_requested:
             self._set_status(STATUS_ERROR)
-            self.detail_line.emit(
-                f"The server exited unexpectedly with code {exit_code}. Open "
-                "the detailed log or the logs folder for the full trace.")
+            self.detail_line.emit(tr(
+                "The server exited unexpectedly with code {code}. Open the "
+                "detailed log or the logs folder for the full trace.",
+                code=exit_code))
         else:
             self._set_status(STATUS_STOPPED)
 
@@ -264,12 +268,11 @@ class ServerProcess(QObject):
             return
         self._stop_timer.stop()
         self._set_status(STATUS_ERROR)
-        self.startup_error.emit(
-            "Could not start the server program: "
-            f"{self._process.errorString()}\n"
-            "If this is a packaged copy, make sure "
-            f"{SERVER_EXE_NAME} is in the same folder as "
-            "SpartacusLegendsServerGUI.exe.")
+        self.startup_error.emit(tr(
+            "Could not start the server program: {error}\nIf this is a "
+            "packaged copy, make sure {server} is in the same folder as "
+            "SpartacusLegendsServerGUI.exe.",
+            error=self._process.errorString(), server=SERVER_EXE_NAME))
 
     def _set_status(self, status: str) -> None:
         if status == self._status:

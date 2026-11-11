@@ -27,8 +27,10 @@ try:
     import eboot_source
     import patch_installer
     import ppu_hash
+    from i18n import N_, tr
 except ImportError:  # Imported as tools.game_detect by the unit tests.
     from tools import adaptive_patch, eboot_source, patch_installer, ppu_hash
+    from tools.i18n import N_, tr
 
 
 STATUS_SUPPORTED = "supported"
@@ -73,7 +75,7 @@ class RPCS3RunningError(DetectionError):
     """Decryption needs rpcs3.exe, which will not run beside an open RPCS3."""
 
 
-RPCS3_RUNNING_MESSAGE = (
+RPCS3_RUNNING_MESSAGE = N_(
     "RPCS3 is open. Its rpcs3.exe cannot decrypt a copy of the game's "
     "executable while another RPCS3 is running - close RPCS3, then check "
     "again.")
@@ -95,9 +97,10 @@ class GameInstall:
         return self.app_version in patch_installer.SUPPORTED_BUILDS
 
     def describe(self) -> str:
-        name = self.title or "Unknown title"
-        text = f"{name} ({self.title_id or 'no title ID'}) version " \
-               f"{self.app_version or 'unknown'}"
+        text = tr("{name} ({title_id}) version {version}",
+                  name=self.title or tr("Unknown title"),
+                  title_id=self.title_id or tr("no title ID"),
+                  version=self.app_version or tr("unknown"))
         if self.sfo_version and self.sfo_version != self.app_version:
             text += f" (PARAM.SFO VERSION {self.sfo_version})"
         return text
@@ -118,16 +121,19 @@ class ExecutableCheck:
 
     def summary(self) -> str:
         if self.status == STATUS_SUPPORTED:
-            return (f"{self.ppu_hash} - the supported {self.supported_version} "
-                    "executable. The shipped patch covers it.")
+            return tr("{hash} - the supported {version} executable. The "
+                      "shipped patch covers it.", hash=self.ppu_hash,
+                      version=self.supported_version)
         if self.status == STATUS_GENERATED:
-            return (f"{self.ppu_hash} - a different dump. A patch generated "
-                    "for it is installed (experimental).")
+            return tr("{hash} - a different dump. A patch generated for it is "
+                      "installed (experimental).", hash=self.ppu_hash)
         if self.can_generate:
-            return (f"{self.ppu_hash} - a different dump. Installing will "
-                    "generate a matching patch for it (experimental).")
-        return (f"{self.ppu_hash} - a different dump that cannot be patched "
-                f"automatically: {self.problem}")
+            return tr("{hash} - a different dump. Installing will generate a "
+                      "matching patch for it (experimental).",
+                      hash=self.ppu_hash)
+        return tr("{hash} - a different dump that cannot be patched "
+                  "automatically: {problem}", hash=self.ppu_hash,
+                  problem=self.problem)
 
 
 @dataclass(frozen=True)
@@ -143,17 +149,18 @@ class BootStatus:
 
     def summary(self) -> str:
         if self.unreadable:
-            return ("RPCS3 is open and keeps its log locked, so the last boot "
-                    "cannot be read yet. Close RPCS3, then check again.")
+            return tr("RPCS3 is open and keeps its log locked, so the last "
+                      "boot cannot be read yet. Close RPCS3, then check "
+                      "again.")
         if self.executable_hash is None:
-            return ("RPCS3's log has a Spartacus Legends boot but no executable "
-                    "hash line yet.")
+            return tr("RPCS3's log has a Spartacus Legends boot but no "
+                      "executable hash line yet.")
         if self.compatibility_applied:
-            return (f"Last boot: the compatibility patch was applied to "
-                    f"{self.executable_hash} "
-                    f"({self.compatibility_writes} writes).")
-        return (f"Last boot: {self.executable_hash} started WITHOUT the "
-                "compatibility patch.")
+            return tr("Last boot: the compatibility patch was applied to "
+                      "{hash} ({writes} writes).", hash=self.executable_hash,
+                      writes=self.compatibility_writes)
+        return tr("Last boot: {hash} started WITHOUT the compatibility "
+                  "patch.", hash=self.executable_hash)
 
 
 # -------------------------------------------------------------- the game
@@ -167,7 +174,8 @@ def detect_game(rpcs3_folder: Path) -> GameInstall | None:
     try:
         fields = patch_installer.read_param_sfo(sfo)
     except (OSError, ValueError) as error:
-        raise DetectionError(f"could not read {sfo}: {error}") from error
+        raise DetectionError(tr("could not read {path}: {error}", path=sfo,
+                                error=error)) from error
     eboot = sfo.parent / "USRDIR" / "EBOOT.BIN"
     return GameInstall(
         rpcs3_root=root,
@@ -230,8 +238,9 @@ def check_executable(game: GameInstall, *, source: Path | None = None,
     """
     source = Path(source) if source is not None else game.eboot_path
     if source is None:
-        raise DetectionError(
-            f"the game folder {game.game_dir} has no USRDIR/EBOOT.BIN")
+        raise DetectionError(tr(
+            "the game folder {path} has no USRDIR/EBOOT.BIN",
+            path=game.game_dir))
     raw = source.read_bytes()
     eboot_sha256 = hashlib.sha256(raw).hexdigest()
     key = _cache_key(eboot_sha256, game.app_version)
@@ -263,7 +272,7 @@ def check_executable(game: GameInstall, *, source: Path | None = None,
 
     if not raw.startswith(eboot_source.ELF_MAGIC) \
             and patch_installer.rpcs3_is_running():
-        raise RPCS3RunningError(RPCS3_RUNNING_MESSAGE)
+        raise RPCS3RunningError(tr(RPCS3_RUNNING_MESSAGE))
     with eboot_source.open_eboot(source, game.rpcs3_root,
                                  allow_decrypt=True,
                                  timeout=timeout) as elf_bytes:

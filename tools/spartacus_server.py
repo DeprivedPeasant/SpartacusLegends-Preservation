@@ -15,6 +15,8 @@ import time
 import traceback
 
 from _version import __version__ as VERSION
+import gui_handoff
+from i18n import tr
 from server_config import (
     DEFAULT_TITLE_VERSION,
     TITLE_VERSION_UNKNOWN_MESSAGE,
@@ -230,6 +232,9 @@ def parse_args(argv=None):
                              "complete data directory is backed up")
     parser.add_argument("--no-wait", action="store_true",
                         help="do not pause on a startup error")
+    parser.add_argument(gui_handoff.CONSOLE_FLAG, action="store_true",
+                        help="run in this console without offering to open "
+                             "SpartacusLegendsServerGUI.exe instead")
     parser.add_argument("--verbose", action="store_true",
                         help="show the full protocol trace on the console; "
                              "the log files always receive it in full")
@@ -265,7 +270,7 @@ def resolve_title_version(cli_value: str | None,
         Path(base_dir) / "data")
     if from_saves is not None:
         return from_saves.value, "existing saves"
-    raise TitleVersionUnknownError(TITLE_VERSION_UNKNOWN_MESSAGE)
+    raise TitleVersionUnknownError(tr(TITLE_VERSION_UNKNOWN_MESSAGE))
 
 
 MIGRATION_TYPE_NAMES = {
@@ -464,6 +469,8 @@ def main() -> int:
         sys.stdout.reconfigure(line_buffering=True)
     args = parse_args()
     base_dir = application_dir()
+    if gui_handoff.offer("SpartacusLegendsServer.exe", base_dir):
+        return 0
     # Set before importing prudp_server / spartacus_onlineconfig: both read the
     # flag once at import time. File logging is never affected.
     os.environ["SPARTACUS_CONSOLE_DETAIL"] = "0" if not args.verbose else "1"
@@ -688,7 +695,7 @@ def main() -> int:
         print(f"Legacy roster bridge: RPCS3 IPC port {args.pine_port}")
     print("Start the game, log in, and leave this window open.")
     print("Press Ctrl+C to stop the server.\n")
-    user_events.emit("ready", "Server ready - start the game in RPCS3")
+    user_events.emit("ready", tr("Server ready - start the game in RPCS3"))
 
     deadline = (time.monotonic() + args.run_seconds
                 if args.run_seconds > 0 else None)

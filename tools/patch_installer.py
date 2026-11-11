@@ -30,8 +30,10 @@ try:
     import adaptive_patch
     import eboot_source
     import ppu_hash
+    from i18n import N_, tr
 except ImportError:  # Imported as tools.patch_installer by the unit tests.
     from tools import adaptive_patch, eboot_source, ppu_hash
+    from tools.i18n import N_, tr
 
 
 # Every supported build, keyed by PARAM.SFO APP_VER. RPCS3 selects a patch
@@ -87,7 +89,7 @@ class InstallWriteError(OSError):
 INTEGRITY_LOW = 0x1000
 INTEGRITY_MEDIUM = 0x2000
 
-LOW_INTEGRITY_HELP = (
+LOW_INTEGRITY_HELP = N_(
     "This program is running at Windows' Low integrity level, so Windows "
     "blocks it from changing RPCS3's settings and your saves even though the "
     "folders allow it. That happens when the folder it was started from has "
@@ -147,11 +149,11 @@ def low_integrity_problem() -> str | None:
     """The plain explanation when this process runs at Low integrity."""
     level = process_integrity_level()
     if level is not None and level < INTEGRITY_MEDIUM:
-        return LOW_INTEGRITY_HELP
+        return tr(LOW_INTEGRITY_HELP)
     return None
 
 
-WRITE_BLOCKED_HELP = (
+WRITE_BLOCKED_HELP = N_(
     "Windows refused to let this program create files there, although the "
     "folder's own permissions may allow it. Common causes: the program was "
     "started from a sandboxed terminal or tool (start it by double-clicking "
@@ -324,10 +326,10 @@ def find_rpcs3_root(folder: Path) -> Path:
     if folder.name.lower() == "patches":
         folder = folder.parent
     if not (folder / "patches").is_dir() or not (folder / "config").is_dir():
-        raise FileNotFoundError(
-            f"Could not find RPCS3's patches and config folders in: {folder}\n"
-            "Choose the folder containing rpcs3.exe."
-        )
+        raise FileNotFoundError(tr(
+            "Could not find RPCS3's patches and config folders in: "
+            "{folder}\nChoose the folder containing rpcs3.exe.",
+            folder=folder))
     return folder
 
 
@@ -477,8 +479,9 @@ def write_access_problem(directories) -> str | None:
             pass
     if not refused:
         return None
-    return ("Nothing was changed. Could not write to: " + "; ".join(refused)
-            + ". " + (low_integrity_problem() or WRITE_BLOCKED_HELP))
+    return tr("Nothing was changed. Could not write to: {folders}.",
+              folders="; ".join(refused)) + " " + (
+        low_integrity_problem() or tr(WRITE_BLOCKED_HELP))
 
 
 def _roll_back(journal: list) -> list[str]:
@@ -621,15 +624,16 @@ def install_setup(rpcs3_folder: Path,
     except OSError as error:
         unrestored = _roll_back(journal)
         if unrestored:
-            raise InstallWriteError(
-                f"The install stopped part-way: {error}. These files could "
-                "not be put back and still hold the new settings (their "
-                "backups sit beside them): " + "; ".join(unrestored),
+            raise InstallWriteError(tr(
+                "The install stopped part-way: {error}. These files could not "
+                "be put back and still hold the new settings (their backups "
+                "sit beside them): {files}", error=error,
+                files="; ".join(unrestored)),
                 rolled_back=False) from error
         raise InstallWriteError(
-            f"The install stopped: {error}. Every file it had already "
-            "changed was put back, so nothing was changed. "
-            + (low_integrity_problem() or WRITE_BLOCKED_HELP),
+            tr("The install stopped: {error}. Every file it had already "
+               "changed was put back, so nothing was changed.", error=error)
+            + " " + (low_integrity_problem() or tr(WRITE_BLOCKED_HELP)),
             rolled_back=True) from error
     if adaptive_report is not None and report is not None:
         # Written only after the patch files are in place; a fixed name keeps
@@ -758,30 +762,34 @@ def game_version_problem(root: Path) -> str | None:
     """Describe why the installed game will not match the patch, if it will not."""
     sfo = find_param_sfo(root)
     if sfo is None:
-        return ("Could not find Spartacus Legends in this RPCS3 folder. Install the "
-                f"USA release ({TITLE_ID}) and let RPCS3 list it before playing.")
+        return tr("Could not find Spartacus Legends in this RPCS3 folder. "
+                  "Install the USA release ({title_id}) and let RPCS3 list it "
+                  "before playing.", title_id=TITLE_ID)
     try:
         fields = read_param_sfo(sfo)
     except (OSError, ValueError) as error:
-        return f"Could not read {sfo}: {error}"
+        return tr("Could not read {path}: {error}", path=sfo, error=error)
     title_id = fields.get("TITLE_ID", "")
     version = fields.get("APP_VER") or fields.get("VERSION", "")
     if title_id and title_id != TITLE_ID:
-        return (f"The game installed here is {title_id}, not {TITLE_ID}. Only the USA "
-                "release is supported.")
+        return tr("The game installed here is {found}, not {title_id}. Only "
+                  "the USA release is supported.", found=title_id,
+                  title_id=TITLE_ID)
     if version and version not in SUPPORTED_BUILDS:
-        supported = " or ".join(SUPPORTED_BUILDS)
-        return (f"The installed game is version {version}. Only {supported} are "
-                "supported, so the patch will not apply. Either update to "
-                "01.06 or remove the game's update data (Manage > Title "
-                f"Database, or delete dev_hdd0/game/{TITLE_ID}-UPDATE) and "
-                "reinstall the base game.")
+        supported = tr(" or ").join(SUPPORTED_BUILDS)
+        return tr("The installed game is version {version}. Only "
+                  "{supported} are supported, so the patch will not apply. "
+                  "Either update to 01.06 or remove the game's update data "
+                  "(Manage > Title Database, or delete "
+                  "dev_hdd0/game/{title_id}-UPDATE) and reinstall the base "
+                  "game.", version=version, supported=supported,
+                  title_id=TITLE_ID)
     return None
 
 
-UNUSED_FOLDER_MESSAGE = (
+UNUSED_FOLDER_MESSAGE = N_(
     "This RPCS3 folder has probably never been used to play Spartacus "
-    f"Legends: it has neither the game ({TITLE_ID}) nor an RPCN account. "
+    "Legends: it has neither the game (NPUB30746) nor an RPCN account. "
     "Choose the RPCS3 you actually play from - in that RPCS3, right-click "
     "Spartacus Legends and choose Open Install Folder, then go up until you "
     "reach the folder that contains rpcs3.exe. Nothing was installed here.")
@@ -793,7 +801,7 @@ def unused_folder_problem(root: Path) -> str | None:
         return None
     if (root / "config" / "rpcn.yml").is_file():
         return None
-    return UNUSED_FOLDER_MESSAGE
+    return tr(UNUSED_FOLDER_MESSAGE)
 
 
 def detected_game_version(root: Path) -> str | None:
@@ -817,14 +825,16 @@ def rpcn_problem(root: Path) -> str | None:
     """Describe why RPCN sign-in will fail, if it will."""
     rpcn = root / "config" / "rpcn.yml"
     if not rpcn.is_file():
-        return ("No RPCN account is set up in RPCS3 yet. Create one in RPCS3 under "
-                "Manage > RPCN > RPCN Account before starting the game.")
+        return tr("No RPCN account is set up in RPCS3 yet. Create one in "
+                  "RPCS3 under Manage > RPCN > RPCN Account before starting "
+                  "the game.")
     for line in rpcn.read_text(encoding="utf-8-sig", errors="replace").splitlines():
         key, separator, value = line.partition(":")
         if separator and key.strip().strip('"\'') == "NPID" and value.strip().strip('"\''):
             return None
-    return ("RPCN has no account name saved. Create or sign in to an RPCN account in "
-            "RPCS3 under Manage > RPCN > RPCN Account before starting the game.")
+    return tr("RPCN has no account name saved. Create or sign in to an RPCN "
+              "account in RPCS3 under Manage > RPCN > RPCN Account before "
+              "starting the game.")
 
 
 def parse_indented_map(text: str) -> dict:
@@ -868,31 +878,33 @@ def eboot_coverage_check(imported_text: str,
                          eboot_elf: Path | None) -> tuple[bool, str, bool]:
     """Report whether the user's executable hash has a patch section."""
     if eboot_elf is None:
-        return (True, "No decrypted executable supplied; hash coverage not "
-                      "checked", False)
+        return (True, tr("No decrypted executable supplied; hash coverage "
+                         "not checked"), False)
     path = Path(eboot_elf)
     if not path.is_file():
-        return (False, f"Decrypted executable not found: {path}", False)
+        return (False, tr("Decrypted executable not found: {path}",
+                          path=path), False)
     if not eboot_source.is_elf(path):
         return (False,
-                f"{path} is not a decrypted ELF. Run RPCS3 Utilities > "
-                "Decrypt PS3 Binaries and choose the produced .elf, then "
-                "verify again.",
+                tr("{path} is not a decrypted ELF. Run RPCS3 Utilities > "
+                   "Decrypt PS3 Binaries and choose the produced .elf, then "
+                   "verify again.", path=path),
                 False)
     try:
         user_hash = ppu_hash.ppu_hash_file(path)
     except (OSError, ValueError) as error:
-        return (False, f"Could not hash {path}: {error}", False)
+        return (False, tr("Could not hash {path}: {error}", path=path,
+                          error=error), False)
     if f"{user_hash}:" in imported_text:
         return (True,
-                f"Executable hash {user_hash} is covered by the installed "
-                "patches", False)
+                tr("Executable hash {hash} is covered by the installed "
+                   "patches", hash=user_hash), False)
     return (False,
-            f"Your executable hash {user_hash} is not covered by the "
-            "installed patches. The dump differs from the supported "
-            "executables, so RPCS3 applies none of the patches. Run the "
-            "installer with --adaptive --eboot-elf <decrypted .elf> to locate "
-            "the patch sites by signature (experimental).",
+            tr("Your executable hash {hash} is not covered by the installed "
+               "patches. The dump differs from the supported executables, so "
+               "RPCS3 applies none of the patches. Run the installer with "
+               "--adaptive --eboot-elf <decrypted .elf> to locate the patch "
+               "sites by signature (experimental).", hash=user_hash),
             False)
 
 
@@ -900,13 +912,13 @@ def executable_coverage_check(imported_text: str,
                               user_hash: str) -> tuple[bool, str, bool]:
     """Coverage line for a hash already computed (no second decrypt)."""
     if f"{user_hash}:" in imported_text:
-        return (True, f"Executable hash {user_hash} is covered by the "
-                      "installed patches", False)
+        return (True, tr("Executable hash {hash} is covered by the "
+                         "installed patches", hash=user_hash), False)
     return (False,
-            f"Your executable hash {user_hash} is not covered by the "
-            "installed patches, so RPCS3 applies none of them. Run the "
-            "installer again: it generates a matching patch for a different "
-            "dump automatically (experimental).", False)
+            tr("Your executable hash {hash} is not covered by the installed "
+               "patches, so RPCS3 applies none of them. Run the installer "
+               "again: it generates a matching patch for a different dump "
+               "automatically (experimental).", hash=user_hash), False)
 
 
 def boot_status_check(boot) -> tuple[bool, str, bool] | None:
@@ -917,8 +929,9 @@ def boot_status_check(boot) -> tuple[bool, str, bool] | None:
         return (True, boot.summary(), False)
     if boot.compatibility_applied:
         return (True, boot.summary(), False)
-    return (False, boot.summary() + " Install or repair the setup, then "
-            "cold-boot the game again.", False)
+    return (False, boot.summary() + " " + tr(
+        "Install or repair the setup, then cold-boot the game again."),
+        False)
 
 
 def verify_setup(rpcs3_folder: Path,
@@ -956,35 +969,38 @@ def verify_setup(rpcs3_folder: Path,
     if config_error:
         config_message = config_error
     elif detected is None:
-        config_message = (
+        config_message = tr(
             "The game version could not be detected, so the server version "
-            f"in {config} was left as "
-            f"{configured_version or 'not set'}. Choose the version you play "
-            "when installing.")
+            "in {path} was left as {version}. Choose the version you play "
+            "when installing.", path=config,
+            version=configured_version or tr("not set"))
     elif configured_version is None:
-        config_message = f"Server version configuration is missing: {config}"
+        config_message = tr("Server version configuration is missing: "
+                            "{path}", path=config)
     elif configured_version != version:
-        config_message = (f"Server is configured for game version "
-                          f"{configured_version}, but RPCS3 has {version}: "
-                          f"{config}")
+        config_message = tr("Server is configured for game version "
+                            "{configured}, but RPCS3 has {version}: {path}",
+                            configured=configured_version, version=version,
+                            path=config)
     else:
-        config_message = (f"Server configured for game version {version} "
-                          f"in {config}")
+        config_message = tr("Server configured for game version {version} "
+                            "in {path}", version=version, path=config)
     checks.append((detected is not None and configured_version == version,
                    config_message, True))
 
     imported = root / "patches" / "imported_patch.yml"
     text = imported.read_text(encoding="utf-8-sig") if imported.is_file() else ""
     installed = ppu_header in text and f'  "{COMPATIBILITY_PATCH}":' in text
-    checks.append((installed, f"Compatibility patch installed in {imported}", True))
+    checks.append((installed, tr("Compatibility patch installed in {path}",
+                                 path=imported), True))
     try:
         if executable_hash is not None:
             checks.append(executable_coverage_check(text, executable_hash))
         else:
             checks.append(eboot_coverage_check(text, eboot_elf))
     except Exception as error:  # a diagnostic must not break verification
-        checks.append((False, f"Could not inspect the executable hash: {error}",
-                       False))
+        checks.append((False, tr("Could not inspect the executable hash: "
+                                 "{error}", error=error), False))
     boot_check = boot_status_check(boot_status)
     if boot_check is not None:
         checks.append(boot_check)
@@ -996,8 +1012,9 @@ def verify_setup(rpcs3_folder: Path,
                      COMPATIBILITY_PATCH, "Spartacus Legends", TITLE_ID,
                      version, "Enabled")
     checks.append((str(enabled).lower() == "true",
-                   "Compatibility patch enabled for "
-                   f"{TITLE_ID} {version} in {patch_config}", True))
+                   tr("Compatibility patch enabled for {title_id} {version} "
+                      "in {path}", title_id=TITLE_ID, version=version,
+                      path=patch_config), True))
 
     custom_config = root / "config" / "custom_configs" / f"config_{TITLE_ID}.yml"
     net = lookup(parse_indented_map(
@@ -1007,14 +1024,18 @@ def verify_setup(rpcs3_folder: Path,
                           ("Internet enabled", "Connected"),
                           ("PSN status", "RPCN")):
         checks.append((net.get(key) == expected,
-                       f"Network setting {key}: {expected}", True))
+                       tr("Network setting {key}: {value}", key=key,
+                          value=expected), True))
 
     game_problem = game_version_problem(root)
     checks.append((game_problem is None,
-                   game_problem or f"Game installed: {TITLE_ID} version {version}",
+                   game_problem or tr("Game installed: {title_id} version "
+                                      "{version}", title_id=TITLE_ID,
+                                      version=version),
                    False))
     rpcn = rpcn_problem(root)
-    checks.append((rpcn is None, rpcn or "RPCN account configured", False))
+    checks.append((rpcn is None, rpcn or tr("RPCN account configured"),
+                   False))
     raw_bind_address = net.get("Bind address", "")
     # parse_indented_map represents an explicitly empty YAML scalar ('' or
     # blank) as an empty mapping. Only a real scalar address is actionable.
@@ -1023,12 +1044,13 @@ def verify_setup(rpcs3_folder: Path,
     if bind_address and bind_address not in {"0.0.0.0", "127.0.0.1"}:
         checks.append((
             False,
-            f"RPCS3 Bind address is {bind_address}. The default loopback "
-            "server cannot be reached from a bound game socket. Either clear "
-            "Bind address for a normal single-client setup, or start "
-            "SpartacusLegendsServer.exe with --host 0.0.0.0 "
-            "--advertise-host <server-LAN-IP>. The advertised host is the "
-            "server address RPCS3 can reach, not RPCS3's Bind address.",
+            tr("RPCS3 Bind address is {address}. The default loopback server "
+               "cannot be reached from a bound game socket. Either clear Bind "
+               "address for a normal single-client setup, or start "
+               "SpartacusLegendsServer.exe with --host 0.0.0.0 "
+               "--advertise-host <server-LAN-IP>. The advertised host is the "
+               "server address RPCS3 can reach, not RPCS3's Bind address.",
+               address=bind_address),
             False,
         ))
     return checks
@@ -1090,6 +1112,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--title-version", choices=sorted(SUPPORTED_BUILDS),
                         help="game version to configure the server for when "
                              "it cannot be detected from the game.")
+    parser.add_argument("--console", action="store_true",
+                        help="run in this console without offering to open "
+                             "SpartacusLegendsServerGUI.exe instead")
     return parser.parse_args()
 
 
@@ -1302,6 +1327,13 @@ def main() -> int:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(line_buffering=True)
     args = parse_args()
+    try:
+        import gui_handoff
+    except ImportError:  # Imported as tools.patch_installer by the tests.
+        from tools import gui_handoff
+    if gui_handoff.offer("SpartacusLegendsPatchInstaller.exe",
+                         application_dir()):
+        return 0
     try:
         code = run(args)
     except KeyboardInterrupt:

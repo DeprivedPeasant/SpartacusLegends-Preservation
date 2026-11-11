@@ -37,8 +37,10 @@ import json
 
 try:
     import user_events
+    from i18n import tr
 except ImportError:  # Imported as tools.prudp_server by the unit tests.
     from tools import user_events
+    from tools.i18n import tr
 
 PORT = 21000
 
@@ -1342,7 +1344,7 @@ def note_native_save_enumeration(type_id):
         _PATCH_CONFIRMED = True
     user_events.emit(
         "patch_confirmed",
-        "Compatibility patch active - the game is loading its saves")
+        tr("Compatibility patch active - the game is loading its saves"))
     return True
 
 
@@ -1356,9 +1358,9 @@ def _note_client_session(connected):
         if connected and before == 0:
             _PATCH_CONFIRMED = False
     if connected and before == 0 and after > 0:
-        user_events.emit("connected", "Game connected")
+        user_events.emit("connected", tr("Game connected"))
     elif not connected and before > 0 and after == 0:
-        user_events.emit("disconnected", "Game disconnected")
+        user_events.emit("disconnected", tr("Game disconnected"))
 
 
 def log(msg):
@@ -1380,15 +1382,17 @@ def encode_balance_pair(gold, silver):
 def emit_balance_synced(gold, silver=None, fame=None):
     """Tell the user the absolute balances a Monetization reply carried."""
     fields = {"gold": gold}
-    parts = [f"{gold} gold"]
+    parts = [tr("{amount} gold", amount=gold)]
     if silver is not None:
         fields["silver"] = silver
-        parts.append(f"{silver} silver")
+        parts.append(tr("{amount} silver", amount=silver))
     if fame is not None:
         fields["fame"] = fame
-        parts.append(f"{fame} fame")
+        parts.append(tr("{amount} fame", amount=fame))
     user_events.emit(
-        "balance_synced", "Balance synced: " + ", ".join(parts), **fields)
+        "balance_synced",
+        tr("Balance synced: {balances}", balances=", ".join(parts)),
+        **fields)
 
 
 
@@ -2271,7 +2275,8 @@ def main(port=None, stop_event=None, ready_event=None, host="0.0.0.0"):
                             # The Tracking service logs in too; that is
                             # analytics plumbing, not the player.
                             user_events.emit(
-                                "logged_in", f"Logged in as {username_text}")
+                                "logged_in", tr("Logged in as {name}",
+                                                name=username_text))
                         resp_body = build_login_response(acct_pid, SERVER_PID)
                         label = "LOGIN"
                     elif rmc["method_id"] == 3:        # RequestTicket
@@ -2492,7 +2497,8 @@ def main(port=None, stop_event=None, ready_event=None, host="0.0.0.0"):
                                 f"silver_cost={silver_cost} -> balances "
                                 f"gold={gold} silver={silver} ***")
                             user_events.emit(
-                                "purchase", f"Shop purchase: item {item_id}")
+                                "purchase", tr("Shop purchase: item {item}",
+                                               item=item_id))
                             emit_balance_synced(gold, silver)
                     elif rmc["method_id"] == 8:     # Enumerate transactions/server time
                         transactions = ECONOMY.method_8_transactions()

@@ -88,6 +88,61 @@ class GuiSmokeTests(unittest.TestCase):
             finally:
                 window.close()
 
+    def test_window_in_spanish_and_portuguese(self):
+        from server_gui.main_window import MainWindow
+        import i18n
+
+        for code, nav, start, status in (
+                ("es", "Servidor", "Iniciar servidor", "Detenido"),
+                ("pt_BR", "Servidor", "Iniciar servidor", "Parado")):
+            with self.subTest(language=code), \
+                    mock.patch.dict(os.environ, {i18n.ENV_VAR: code}), \
+                    tempfile.TemporaryDirectory() as temp:
+                window = MainWindow(base_dir=Path(temp))
+                try:
+                    # Keys stay English; only the shown text changes.
+                    self.assertEqual(window.page_names()[0], "Server")
+                    self.assertIn(nav, window.nav.item(0).text())
+                    self.assertIn(start,
+                                  window.server_tab.start_button.text())
+                    self.assertEqual(window.server_tab.status_label.text(),
+                                     status)
+                    self.assertIn(status, window.status_pill.text())
+                    self.assertEqual(window.language_combo.currentData(),
+                                     code)
+                    self.assertNotIn("Welcome", window.patch_tab.attention
+                                     .heading.text())
+                finally:
+                    window.close()
+
+    def test_choosing_a_language_saves_it_and_offers_a_restart(self):
+        from server_gui import main_window as module
+        import i18n
+
+        with mock.patch.dict(os.environ), tempfile.TemporaryDirectory() as temp:
+            os.environ.pop(i18n.ENV_VAR, None)
+            window = module.MainWindow(base_dir=Path(temp))
+            self.addCleanup(window.close)
+            index = window.language_combo.findData("es")
+            with mock.patch.object(module.QMessageBox, "question",
+                                   return_value=module.QMessageBox.Yes) \
+                    as question, \
+                    mock.patch.object(window, "restart") as restart:
+                window._on_language_chosen(index)
+            # Asked in the chosen language, then restarted into it.
+            self.assertIn("idioma", question.call_args.args[2])
+            restart.assert_called_once()
+            self.assertEqual(window._settings.value("language"), "es")
+            # This window keeps its language until the restart.
+            self.assertEqual(i18n.current(), "en")
+
+    def test_startup_language_prefers_the_saved_choice(self):
+        from server_gui.main_window import startup_language
+
+        self.assertEqual(startup_language("pt_BR", ["es-ES"]), "pt_BR")
+        self.assertEqual(startup_language(None, ["es-MX", "en-US"]), "es")
+        self.assertEqual(startup_language("klingon", ["de-DE"]), "en")
+
     def start_with(self, app, detected, answer=None):
         """Press Start with RPCS3 reporting ``detected``; never binds a port."""
         from server_gui import main_window as module

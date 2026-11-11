@@ -12,9 +12,19 @@ from __future__ import annotations
 from pathlib import Path
 import sys
 
-from PySide6.QtCore import QSettings, QSize, Qt, QTimer
+from PySide6.QtCore import (
+    QLibraryInfo,
+    QLocale,
+    QProcess,
+    QSettings,
+    QSize,
+    Qt,
+    QTimer,
+    QTranslator,
+)
 from PySide6.QtWidgets import (
     QApplication,
+    QComboBox,
     QHBoxLayout,
     QListWidget,
     QListWidgetItem,
@@ -34,18 +44,23 @@ from .server_tab import ServerTab
 from .widgets import button, label
 
 try:
+    import i18n
     import migration_coordinator
     import patch_installer
     import server_config
     from _version import __version__ as VERSION
+    from i18n import N_, tr
 except ImportError:  # Imported as tools.server_gui.main_window by tests.
-    from tools import migration_coordinator, patch_installer, server_config
+    from tools import i18n, migration_coordinator, patch_installer, \
+        server_config
     from tools._version import __version__ as VERSION
+    from tools.i18n import N_, tr
 
 
 APP_NAME = "Spartacus Legends Preservation Server"
 APP_ORGANISATION = "SpartacusLegendsPreservation"
 SETTINGS_FILE = "gui-settings.ini"
+SETTING_LANGUAGE = "language"
 PATCH_PAGE = 3
 
 # After the game logs in, the server reports ``patch_confirmed`` when the game
@@ -54,14 +69,52 @@ PATCH_PAGE = 3
 # a minute without it means the patch did not take effect.
 PATCH_CONFIRM_TIMEOUT_MS = 60_000
 
-# (navigation label, glyph, page subtitle)
+# (navigation label, glyph, page subtitle); English, translated when shown.
 PAGES = (
-    ("Server", "⚔", "Start the server and follow what the game is doing."),
-    ("Player", "◆", "Gold, silver and fame for your gladiator school."),
-    ("Items", "▤", "Owned items, Boost uses and purchased Ludus slots."),
-    ("Patch setup", "⚙", "Install and verify the RPCS3 patch and network "
-                              "settings."),
+    (N_("Server"), "⚔",
+     N_("Start the server and follow what the game is doing.")),
+    (N_("Player"), "◆",
+     N_("Gold, silver and fame for your gladiator school.")),
+    (N_("Items"), "▤",
+     N_("Owned items, Boost uses and purchased Ludus slots.")),
+    (N_("Patch setup"), "⚙",
+     N_("Install and verify the RPCS3 patch and network settings.")),
 )
+
+
+def startup_language(saved, ui_languages) -> str:
+    """The saved choice, else the first supported Windows UI language."""
+    chosen = i18n.normalise(saved)
+    if chosen is not None:
+        return chosen
+    return i18n.language_from(ui_languages)
+
+
+def install_qt_translator(app, code: str):
+    """Translate Qt's own buttons (Yes, Cancel...) and dialogs; None if absent."""
+    if code == i18n.ENGLISH:
+        return None
+    folders = [QLibraryInfo.path(QLibraryInfo.LibraryPath.TranslationsPath)]
+    try:
+        import PySide6
+        folders.append(str(Path(PySide6.__file__).resolve().parent
+                           / "translations"))
+    except (ImportError, OSError):
+        pass
+    translator = QTranslator(app)
+    for folder in folders:
+        if folder and translator.load(f"qtbase_{code}", folder):
+            app.installTranslator(translator)
+            return translator
+    return None
+
+
+def restart_command() -> tuple[str, list[str]]:
+    """How to start this app again (frozen executable or source script)."""
+    if getattr(sys, "frozen", False):
+        return sys.executable, []
+    script = Path(__file__).resolve().parents[1] / "spartacus_gui.py"
+    return sys.executable, [str(script)]
 
 
 def known_title_version(base_dir: Path) -> str | None:
@@ -117,7 +170,7 @@ class MainWindow(QMainWindow):
         self.nav.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.nav.setIconSize(QSize(0, 0))
         for name, glyph, _subtitle in PAGES:
-            item = QListWidgetItem(f"{glyph}   {name}")
+            item = QListWidgetItem(f"{glyph}   {tr(name)}")
             item.setData(Qt.ItemDataRole.UserRole, name)
             self.nav.addItem(item)
 
@@ -131,6 +184,13 @@ class MainWindow(QMainWindow):
 
         self.theme_toggle = button("")
         self.theme_toggle.setObjectName("themeToggle")
+        self.language_combo = QComboBox()
+        self.language_combo.setObjectName("languageCombo")
+        self.language_combo.setToolTip(tr("Language"))
+        for code, name in i18n.LANGUAGES.items():
+            self.language_combo.addItem(name, code)
+        self.language_combo.setCurrentIndex(
+            self.language_combo.findData(i18n.current()))
 
         self.setCentralWidget(self._build_shell())
         self.setWindowTitle(APP_NAME)
@@ -154,16 +214,18 @@ class MainWindow(QMainWindow):
         if not self.patch_tab.setup_completed():
             self.nav.setCurrentRow(PATCH_PAGE)
             self.patch_tab.show_attention(
-                "\u2694  Welcome - set up RPCS3 first",
-                "Choose your RPCS3 folder. The game, its version and its "
-                "executable are found and checked automatically; then press "
-                "Install / repair setup. You only need to do this once.")
+                "⚔  " + tr("Welcome - set up RPCS3 first"),
+                tr("Choose your RPCS3 folder. The game, its version and its "
+                   "executable are found and checked automatically; then "
+                   "press Install / repair setup. You only need to do this "
+                   "once."))
         low = patch_installer.low_integrity_problem()
         if low:
             # Shown before anything else: every write would be refused.
             self.nav.setCurrentRow(PATCH_PAGE)
             self.patch_tab.show_attention(
-                "\u26a0  Windows is limiting this copy of the program", low)
+                "⚠  " + tr("Windows is limiting this copy of the "
+                                "program"), low)
         if self.patch_tab.rpcs3_root() is not None:
             self.patch_tab.recheck()
 
@@ -185,9 +247,15 @@ class MainWindow(QMainWindow):
         side.addWidget(subtitle)
         side.addSpacing(26)
         side.addWidget(self.nav, 1)
+        language_row = QHBoxLayout()
+        language_row.setContentsMargins(14, 0, 14, 0)
+        language_row.addWidget(self.language_combo, 1)
+        side.addLayout(language_row)
+        side.addSpacing(6)
         side.addWidget(self.theme_toggle)
         side.addSpacing(8)
-        version = label(f"Server v{VERSION}", role="muted")
+        version = label(tr("Server v{version}", version=VERSION),
+                        role="muted")
         version.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         side.addWidget(version)
 
@@ -225,6 +293,7 @@ class MainWindow(QMainWindow):
         self.server_tab.title_version_changed.connect(
             self._on_title_version_changed)
         self.theme_toggle.clicked.connect(self._toggle_theme)
+        self.language_combo.activated.connect(self._on_language_chosen)
         self.process.event_received.connect(self._on_server_event)
         self.patch_timer.timeout.connect(self._patch_not_confirmed)
         self.patch_tab.setup_installed.connect(self._on_setup_installed)
@@ -239,8 +308,8 @@ class MainWindow(QMainWindow):
             return
         self.stack.setCurrentIndex(index)
         name, _glyph, subtitle = PAGES[index]
-        self.page_title.setText(name)
-        self.page_subtitle.setText(subtitle)
+        self.page_title.setText(tr(name))
+        self.page_subtitle.setText(tr(subtitle))
 
     # -------------------------------------------------------------- theme
     def apply_palette(self, dark: bool) -> None:
@@ -251,7 +320,7 @@ class MainWindow(QMainWindow):
         self._theme_name = selected.name
         theme.apply(app, selected)
         self.theme_toggle.setText(
-            "☼  Light theme" if dark else "☾  Dark theme")
+            "☼  " + tr("Light theme") if dark else "☾  " + tr("Dark theme"))
         self._settings.setValue("theme", selected.name)
         # Write now: a deferred write on destruction would recreate the
         # settings folder after its owner (for example a test) removed it.
@@ -260,9 +329,41 @@ class MainWindow(QMainWindow):
     def _toggle_theme(self) -> None:
         self.apply_palette(self._theme_name != theme.DARK.name)
 
+    # ------------------------------------------------------------ language
+    def _on_language_chosen(self, index: int) -> None:
+        code = self.language_combo.itemData(index)
+        if not code or code == i18n.current():
+            return
+        self._settings.setValue(SETTING_LANGUAGE, code)
+        self._settings.sync()
+        # Asked in the chosen language: that is the one the user reads.
+        title = i18n.tr_in(code, "Change language")
+        if self.process.is_running():
+            QMessageBox.information(
+                self, title, i18n.tr_in(
+                    code, "The new language is used the next time you open "
+                          "the app. The server keeps running."))
+            return
+        answer = QMessageBox.question(
+            self, title, i18n.tr_in(
+                code, "Restart the app now to use the new language?"),
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+        if answer == QMessageBox.Yes:
+            self.restart()
+
+    def restart(self) -> bool:
+        """Start a new copy of the app, then close this one."""
+        program, arguments = restart_command()
+        started, _pid = QProcess.startDetached(program, arguments,
+                                               str(self.base_dir))
+        if started:
+            self.close()
+        return started
+
     # ------------------------------------------------------------- status
     def _show_title_version(self, title_version: str) -> None:
-        self.version_chip.setText(f"Game {title_version}")
+        self.version_chip.setText(tr("Game {version}",
+                                     version=title_version))
 
     def _on_title_version_changed(self, title_version: str) -> None:
         self.title_version = title_version
@@ -298,7 +399,8 @@ class MainWindow(QMainWindow):
             # This start still uses the right version on its command line.
             self.server_tab._append_event({
                 "kind": "warning",
-                "message": f"Could not record the game version: {error}",
+                "message": tr("Could not record the game version: {error}",
+                              error=error),
             })
 
     def _confirm_title_version(self, selected: str) -> bool:
@@ -310,10 +412,11 @@ class MainWindow(QMainWindow):
                 return True
             self.nav.setCurrentRow(PATCH_PAGE)
             self.patch_tab.show_attention(
-                "⚠  Which version of the game do you have?",
-                "The server could not tell, and the wrong version puts your "
-                "saves in the wrong folder. Choose your RPCS3 folder and "
-                "press Install / repair setup, then start the server.")
+                "⚠  " + tr("Which version of the game do you have?"),
+                tr("The server could not tell, and the wrong version puts "
+                   "your saves in the wrong folder. Choose your RPCS3 folder "
+                   "and press Install / repair setup, then start the "
+                   "server."))
             return False
         if known is None:
             self._remember_title_version(detected)
@@ -321,11 +424,12 @@ class MainWindow(QMainWindow):
         if detected == selected:
             return True
         answer = QMessageBox.question(
-            self, "Game version mismatch",
-            f"RPCS3 has game version {detected}, but the server is set to "
-            f"{selected}. Saves from the other version are refused, so "
-            f"progress would not be kept.\n\nSwitch the server to {detected}?"
-            f"\n\nEach version keeps its own saves.",
+            self, tr("Game version mismatch"),
+            tr("RPCS3 has game version {detected}, but the server is set to "
+               "{selected}. Saves from the other version are refused, so "
+               "progress would not be kept.\n\nSwitch the server to "
+               "{detected}?\n\nEach version keeps its own saves.",
+               detected=detected, selected=selected),
             QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel,
             QMessageBox.Yes)
         if answer == QMessageBox.Yes:
@@ -353,15 +457,16 @@ class MainWindow(QMainWindow):
             return
         self.server_tab._append_event({
             "kind": "warning",
-            "message": "The game logged in but did not start loading its "
-                       "saves - the compatibility patch is not active.",
+            "message": tr("The game logged in but did not start loading its "
+                          "saves - the compatibility patch is not active."),
         })
         self.nav.setCurrentRow(PATCH_PAGE)
         self.patch_tab.show_attention(
-            "\u26a0  The compatibility patch did not take effect",
-            "The game logged in but never started loading its saves, so "
-            "RPCS3 did not apply the patch. Close RPCS3, press Check again to "
-            "read its last boot, then Install / repair setup and cold-boot.")
+            "⚠  " + tr("The compatibility patch did not take effect"),
+            tr("The game logged in but never started loading its saves, so "
+               "RPCS3 did not apply the patch. Close RPCS3, press Check again "
+               "to read its last boot, then Install / repair setup and "
+               "cold-boot."))
         self.patch_tab.recheck()
 
     def _on_status_changed(self, status: str) -> None:
@@ -380,10 +485,11 @@ class MainWindow(QMainWindow):
             event.accept()
             return
         confirm = QMessageBox.question(
-            self, "The server is still running",
-            "The server is still running. Stop it and close the window?\n\n"
-            "If the game is connected: return to the Ludus, wait about 20 "
-            "seconds for the native autosave, then close RPCS3 first.",
+            self, tr("The server is still running"),
+            tr("The server is still running. Stop it and close the window?"
+               "\n\nIf the game is connected: return to the Ludus, wait "
+               "about 20 seconds for the native autosave, then close RPCS3 "
+               "first."),
             QMessageBox.Yes | QMessageBox.Cancel, QMessageBox.Cancel)
         if confirm != QMessageBox.Yes:
             event.ignore()
@@ -403,6 +509,11 @@ def run(argv=None) -> int:
         app = QApplication(arguments)
     app.setApplicationName(APP_NAME)
     app.setOrganizationName(APP_ORGANISATION)
+    settings = QSettings(str(application_base_dir() / SETTINGS_FILE),
+                         QSettings.Format.IniFormat)
+    language = i18n.set_language(startup_language(
+        settings.value(SETTING_LANGUAGE), QLocale.system().uiLanguages()))
+    install_qt_translator(app, language)
     theme.apply(app, theme.DARK)
     window = MainWindow()
     window.show()

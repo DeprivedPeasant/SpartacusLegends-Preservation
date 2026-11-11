@@ -39,7 +39,9 @@ try:
     import migration_coordinator
     import prudp_server
     import title_save_migration
+    from i18n import N_, tr
 except ImportError:  # Imported as tools.save_editor by the unit tests.
+    from tools.i18n import N_, tr
     from tools import migration_coordinator
     from tools import prudp_server
     # title_save_migration imports migration_coordinator by its bare module
@@ -68,6 +70,8 @@ BACKUP_FORMAT = "spartacus-save-editor-backup"
 BACKUP_FORMAT_VERSION = 1
 
 BALANCE_NAMES = tuple(title_save_migration.PROFILE_BALANCE_OFFSETS)
+# The balance names as shown to the player (keys stay English).
+BALANCE_LABELS = (N_("gold"), N_("silver"), N_("fame"))
 
 # Item groups are labels only, keyed by the client's ``item_id / 10000`` family
 # rule (notes/16-v106-daily-login-boost-handoff.md).  No item names are invented.
@@ -77,9 +81,10 @@ GROUP_FAMILIES = {
     3: "3xxxx",
     4: "4xxxx",
 }
-GROUP_BOOSTS = "Boosts (60000-60063)"
-GROUP_SLOTS = "Ludus slots (80002-80007)"
-GROUP_OTHER = "Other IDs"
+# English keys; the GUI translates them when it shows a group.
+GROUP_BOOSTS = N_("Boosts (60000-60063)")
+GROUP_SLOTS = N_("Ludus slots (80002-80007)")
+GROUP_OTHER = N_("Other IDs")
 GROUP_ORDER = (
     "1xxxx",
     "2xxxx",
@@ -133,12 +138,13 @@ def external_server_reason(host: str = SERVER_PROBE_HOST,
                                 socket.SO_EXCLUSIVEADDRUSE, 1)
             sock.bind((host, port))
         except OSError as error:
-            return (f"UDP port {port} on {host} is already in use ({error}). "
-                    "A Spartacus Legends server appears to be running outside "
-                    "this window (for example SpartacusLegendsServer.exe in a "
-                    "console). Stop it first: its in-memory economy would "
-                    "overwrite these edits. If another program holds the port, "
-                    "close that program instead.")
+            return tr("UDP port {port} on {host} is already in use "
+                      "({error}). A Spartacus Legends server appears to be "
+                      "running outside this window (for example "
+                      "SpartacusLegendsServer.exe in a console). Stop it "
+                      "first: its in-memory economy would overwrite these "
+                      "edits. If another program holds the port, close that "
+                      "program instead.", port=port, host=host, error=error)
         finally:
             sock.close()
     return None
@@ -147,7 +153,8 @@ def external_server_reason(host: str = SERVER_PROBE_HOST,
 def _refuse_if_external_server(action: str) -> None:
     reason = external_server_reason()
     if reason is not None:
-        raise SaveEditorError(f"refusing to {action}: {reason}")
+        raise SaveEditorError(tr("refusing to {action}: {reason}",
+                                 action=tr(action), reason=reason))
 
 
 @dataclass(frozen=True)
@@ -377,18 +384,20 @@ def load(data_dir: Path,
 def _parse_item_id(value) -> int:
     """Validate one user-supplied item ID (add-by-ID entry)."""
     if isinstance(value, bool):
-        raise SaveEditorError("an item ID must be a whole number")
+        raise SaveEditorError(tr("an item ID must be a whole number"))
     try:
         item_id = int(value)
     except (TypeError, ValueError) as error:
-        raise SaveEditorError(
-            f"an item ID must be a whole number, not {value!r}") from error
+        raise SaveEditorError(tr(
+            "an item ID must be a whole number, not {value!r}",
+            value=value)) from error
     if not 0 <= item_id <= U32_MAX:
-        raise SaveEditorError(f"item ID {item_id} does not fit in 32 bits")
+        raise SaveEditorError(tr("item ID {item} does not fit in 32 bits",
+                                 item=item_id))
     if item_id == prudp_server.STORE_REFRESH_SENTINEL:
-        raise SaveEditorError(
-            f"{prudp_server.STORE_REFRESH_SENTINEL} is the recruitment-store "
-            "refresh command, not an item")
+        raise SaveEditorError(tr(
+            "{item} is the recruitment-store refresh command, not an item",
+            item=prudp_server.STORE_REFRESH_SENTINEL))
     return item_id
 
 
@@ -447,7 +456,7 @@ def remove_owned_item(owned_items, item_id) -> tuple[int, ...]:
     item_id = _parse_item_id(item_id)
     items = normalise_owned_items(owned_items)
     if item_id not in set(items):
-        raise SaveEditorError(f"item {item_id} is not owned")
+        raise SaveEditorError(tr("item {item} is not owned", item=item_id))
     return tuple(item for item in items if item != item_id)
 
 
@@ -456,19 +465,21 @@ def set_item_quantity(item_quantities, owned_items, item_id,
     """Return the quantity map with one owned item's count set (0..99)."""
     item_id = _parse_item_id(item_id)
     if isinstance(quantity, bool):
-        raise SaveEditorError("an item quantity must be a whole number")
+        raise SaveEditorError(tr("an item quantity must be a whole number"))
     try:
         count = int(quantity)
     except (TypeError, ValueError) as error:
-        raise SaveEditorError(
-            f"an item quantity must be a whole number, not {quantity!r}"
-        ) from error
+        raise SaveEditorError(tr(
+            "an item quantity must be a whole number, not {value!r}",
+            value=quantity)) from error
     owned = set(normalise_owned_items(owned_items))
     if item_id not in owned:
-        raise SaveEditorError(f"item {item_id} is not owned; add it first")
+        raise SaveEditorError(tr("item {item} is not owned; add it first",
+                                 item=item_id))
     if not 0 <= count <= MAX_QUANTITY:
-        raise SaveEditorError(
-            f"item quantity must be between 0 and {MAX_QUANTITY}")
+        raise SaveEditorError(tr(
+            "item quantity must be between 0 and {maximum}",
+            maximum=MAX_QUANTITY))
     result = normalise_item_quantities(item_quantities, owned)
     result[item_id] = count
     return result
@@ -656,28 +667,33 @@ def list_backups(data_dir: Path) -> list[BackupInfo]:
 # --------------------------------------------------------------------- save
 
 def _clamp_balance(name: str, value, source: str) -> tuple[int, list[str]]:
+    shown = tr(name)
     if isinstance(value, bool):
-        raise SaveEditorError(f"{name} must be a whole number")
+        raise SaveEditorError(tr("{name} must be a whole number", name=shown))
     try:
         number = int(value)
     except (TypeError, ValueError) as error:
-        raise SaveEditorError(
-            f"{name} must be a whole number, not {value!r}") from error
+        raise SaveEditorError(tr(
+            "{name} must be a whole number, not {value!r}", name=shown,
+            value=value)) from error
     warnings: list[str] = []
     if number < 0:
-        warnings.append(f"{name} {number} ({source}) is negative; clamped to 0.")
+        warnings.append(tr(
+            "{name} {number} ({source}) is negative; clamped to 0.",
+            name=shown, number=number, source=source))
         number = 0
     if number > U32_MAX:
-        warnings.append(
-            f"{name} {number} ({source}) does not fit in 32 bits; clamped to "
-            f"{U32_MAX}.")
+        warnings.append(tr(
+            "{name} {number} ({source}) does not fit in 32 bits; clamped to "
+            "{maximum}.", name=shown, number=number, source=source,
+            maximum=U32_MAX))
         number = U32_MAX
     elif number > DISPLAY_WARNING_THRESHOLD:
-        warnings.append(
-            f"{name} {number} is above {DISPLAY_WARNING_THRESHOLD:,}. The "
-            "game's on-screen display limit is unknown (hypothesis: large "
-            "values may display incorrectly). The value was written unchanged."
-        )
+        warnings.append(tr(
+            "{name} {number} is above {threshold:,}. The game's on-screen "
+            "display limit is unknown (hypothesis: large values may display "
+            "incorrectly). The value was written unchanged.", name=shown,
+            number=number, threshold=DISPLAY_WARNING_THRESHOLD))
     return number, warnings
 
 
@@ -703,12 +719,12 @@ def save(data_dir: Path,
     over the native object.
     """
     if server_running:
-        raise SaveEditorError(
-            "refusing to edit save files while the server is running. Stop the "
-            "server, return to the Ludus, wait about 20 seconds, and close "
-            "RPCS3 first. Live edits use the server's control channel instead."
-        )
-    _refuse_if_external_server("edit save files")
+        raise SaveEditorError(tr(
+            "refusing to edit save files while the server is running. Stop "
+            "the server, return to the Ludus, wait about 20 seconds, and "
+            "close RPCS3 first. Live edits use the server's control channel "
+            "instead."))
+    _refuse_if_external_server(N_("edit save files"))
 
     paths = title_paths(data_dir, title_version)
     data_dir = paths.data_dir
@@ -731,9 +747,10 @@ def save(data_dir: Path,
     warnings: list[str] = []
     for name in BALANCE_NAMES:
         if requested[name] is None:
-            value, source = int(store.data[name]), "existing companion value"
+            value = int(store.data[name])
+            source = tr("existing companion value")
         else:
-            value, source = requested[name], "edited"
+            value, source = requested[name], tr("edited")
         balances[name], clamp_warnings = _clamp_balance(name, value, source)
         warnings.extend(clamp_warnings)
 
@@ -788,11 +805,10 @@ def save(data_dir: Path,
                 f"{backup_dir}: {error}") from error
         native_written = True
     elif holds_balances:
-        warnings.append(
+        warnings.append(tr(
             "The native profile (1.bin) does not exist yet, so only the "
             "companion profile was edited. The game's next native autosave "
-            "will create it."
-        )
+            "will create it."))
 
     try:
         _atomic_write(paths.companion_path, companion_bytes)
@@ -826,11 +842,10 @@ def restore_backup(data_dir: Path, backup_name: str, *,
     atomically.
     """
     if server_running:
-        raise SaveEditorError(
+        raise SaveEditorError(tr(
             "refusing to restore a backup while the server is running. Stop "
-            "the server and close RPCS3 first."
-        )
-    _refuse_if_external_server("restore a backup")
+            "the server and close RPCS3 first."))
+    _refuse_if_external_server(N_("restore a backup"))
     name = str(backup_name)
     if not name or Path(name).name != name or name in (".", ".."):
         raise SaveEditorError(f"invalid backup name {backup_name!r}")

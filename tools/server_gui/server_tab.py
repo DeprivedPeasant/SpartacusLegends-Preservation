@@ -36,20 +36,26 @@ from .server_process import (
 )
 from .widgets import Card, button, label
 
+try:
+    from i18n import N_, tr
+except ImportError:  # Imported as tools.server_gui.server_tab by tests.
+    from tools.i18n import N_, tr
+
 
 STATUS_EXPLANATIONS = {
-    STATUS_STOPPED: "The server is not running. Choose your game version and "
-                    "press Start.",
-    STATUS_STARTING: "Starting the server...",
-    STATUS_READY: "Server ready - start the game in RPCS3 and log in.",
-    STATUS_GAME_CONNECTED: "Game connected. Do not stop the server while you "
-                           "are playing.",
-    STATUS_STOPPING: "Stopping the server...",
-    STATUS_ERROR: "The server could not start, or stopped unexpectedly. Turn "
-                  "on the detailed log for the last error.",
+    STATUS_STOPPED: N_("The server is not running. Choose your game version "
+                       "and press Start."),
+    STATUS_STARTING: N_("Starting the server..."),
+    STATUS_READY: N_("Server ready - start the game in RPCS3 and log in."),
+    STATUS_GAME_CONNECTED: N_("Game connected. Do not stop the server while "
+                              "you are playing."),
+    STATUS_STOPPING: N_("Stopping the server..."),
+    STATUS_ERROR: N_("The server could not start, or stopped unexpectedly. "
+                     "Turn on the detailed log for the last error."),
 }
 
-EMPTY_FEED_TEXT = "Nothing yet - events appear here once the server starts."
+EMPTY_FEED_TEXT = N_("Nothing yet - events appear here once the server "
+                     "starts.")
 
 
 class ServerTab(QWidget):
@@ -73,8 +79,10 @@ class ServerTab(QWidget):
         if index >= 0:
             self.version_combo.setCurrentIndex(index)
 
-        self.start_button = button("▶  Start server", "primary", "large")
-        self.stop_button = button("■  Stop server", "danger", "large")
+        self.start_button = button("▶  " + tr("Start server"), "primary",
+                                   "large")
+        self.stop_button = button("■  " + tr("Stop server"), "danger",
+                                  "large")
         self.stop_button.setEnabled(False)
 
         self.status_glyph = label(role="bigGlyph")
@@ -89,15 +97,15 @@ class ServerTab(QWidget):
         self.events.setWordWrap(True)
         self._add_placeholder()
 
-        self.show_detail = QCheckBox("Show detailed log")
+        self.show_detail = QCheckBox(tr("Show detailed log"))
         self.detail = QPlainTextEdit()
         self.detail.setObjectName("detailLog")
         self.detail.setReadOnly(True)
         self.detail.setMaximumBlockCount(5000)
         self.detail.setVisible(False)
 
-        self.open_logs = button("Open logs folder")
-        self.clear_feed = button("Clear")
+        self.open_logs = button(tr("Open logs folder"))
+        self.clear_feed = button(tr("Clear"))
 
         self._build_layout()
         self._connect_signals()
@@ -116,7 +124,7 @@ class ServerTab(QWidget):
 
         version_box = QVBoxLayout()
         version_box.setSpacing(4)
-        version_box.addWidget(label("GAME VERSION", role="statLabel"))
+        version_box.addWidget(label(tr("GAME VERSION"), role="statLabel"))
         version_box.addWidget(self.version_combo)
         grid.addLayout(version_box, 0, 2, 2, 1)
         buttons = QHBoxLayout()
@@ -131,14 +139,15 @@ class ServerTab(QWidget):
         for text in ("Online config  TCP 80", "Quazal auth  UDP 21000",
                      "Quazal secure  UDP 21001"):
             chips.addWidget(label(text, role="chip"))
-        chips.addStretch(1)
+        # Wraps rather than clipping at the window's minimum width.
         chips.addWidget(label(
-            "The game reaches these through RPCS3's IP swap.", role="muted"))
+            tr("The game reaches these through RPCS3's IP swap."),
+            role="muted", wrap=True), 1)
         control.body.addLayout(chips)
 
-        feed = Card("Activity", "Plain-language events from the server. The "
-                    "full protocol trace is always written to the logs "
-                    "folder.")
+        feed = Card(tr("Activity"), tr(
+            "Plain-language events from the server. The full protocol trace "
+            "is always written to the logs folder."))
         feed.body.addWidget(self.events, 1)
         feed_controls = QHBoxLayout()
         feed_controls.addWidget(self.show_detail)
@@ -188,15 +197,16 @@ class ServerTab(QWidget):
     def _confirm_stop_while_connected(self) -> bool:
         box = QMessageBox(self)
         box.setIcon(QMessageBox.Icon.Warning)
-        box.setWindowTitle("Stop the server while the game is connected?")
-        box.setText("The game is still connected to the server.")
-        box.setInformativeText(
+        box.setWindowTitle(
+            tr("Stop the server while the game is connected?"))
+        box.setText(tr("The game is still connected to the server."))
+        box.setInformativeText(tr(
             "Before stopping:\n"
             "1. Return to the Ludus (main menu) in the game.\n"
             "2. Wait about 20 seconds so the game's native autosave finishes.\n"
             "3. Close RPCS3 first, then stop the server.\n\n"
             "Stopping now can lose your latest progress. The server is never "
-            "restarted automatically.")
+            "restarted automatically."))
         box.setStandardButtons(QMessageBox.StandardButton.Yes
                                | QMessageBox.StandardButton.Cancel)
         box.setDefaultButton(QMessageBox.StandardButton.Cancel)
@@ -212,7 +222,7 @@ class ServerTab(QWidget):
         self._add_placeholder()
 
     def _add_placeholder(self) -> None:
-        item = QListWidgetItem(EMPTY_FEED_TEXT)
+        item = QListWidgetItem(tr(EMPTY_FEED_TEXT))
         item.setData(Qt.ItemDataRole.UserRole, "placeholder")
         item.setFlags(Qt.ItemFlag.NoItemFlags)
         self.events.addItem(item)
@@ -220,9 +230,9 @@ class ServerTab(QWidget):
     # -------------------------------------------------------------- signals
     def _apply_status(self, status: str) -> None:
         self.status_glyph.setText(theme.STATUS_GLYPHS.get(status, ""))
-        self.status_label.setText(status)
+        self.status_label.setText(tr(status))
         self.status_explanation.setText(
-            STATUS_EXPLANATIONS.get(status, ""))
+            tr(STATUS_EXPLANATIONS.get(status, "")))
         # A QProcess reports "not running" for a moment during startup, so the
         # word state is what decides the buttons here.
         running = self.process.is_running() or status in (
@@ -250,16 +260,17 @@ class ServerTab(QWidget):
     def show_startup_error(self, report: str) -> None:
         """Show the server's startup report, including port diagnostics."""
         dialog = QDialog(self)
-        dialog.setWindowTitle("The server could not start")
+        dialog.setWindowTitle(tr("The server could not start"))
         dialog.resize(760, 460)
         layout = QVBoxLayout(dialog)
         layout.setContentsMargins(20, 18, 20, 18)
         layout.setSpacing(12)
-        layout.addWidget(label("✖  The server could not start",
+        layout.addWidget(label("✖  " + tr("The server could not start"),
                                role="cardTitle"))
         layout.addWidget(label(
-            "The server reported this problem. If another program is using "
-            "port 80, the report below names it and suggests a fix.",
+            tr("The server reported this problem. If another program is "
+               "using port 80, the report below names it and suggests a "
+               "fix."),
             role="muted", wrap=True))
         text = QPlainTextEdit()
         text.setObjectName("detailLog")
@@ -267,8 +278,8 @@ class ServerTab(QWidget):
         text.setPlainText(report)
         layout.addWidget(text, 1)
         buttons = QHBoxLayout()
-        copy_button: QPushButton = button("Copy details")
-        close_button = button("Close", "primary")
+        copy_button: QPushButton = button(tr("Copy details"))
+        close_button = button(tr("Close"), "primary")
         buttons.addStretch(1)
         buttons.addWidget(copy_button)
         buttons.addWidget(close_button)
@@ -276,7 +287,7 @@ class ServerTab(QWidget):
 
         def copy_details() -> None:
             QGuiApplication.clipboard().setText(report)
-            copy_button.setText("Copied")
+            copy_button.setText(tr("Copied"))
 
         copy_button.clicked.connect(copy_details)
         close_button.clicked.connect(dialog.accept)

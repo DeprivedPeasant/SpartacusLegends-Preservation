@@ -44,6 +44,10 @@ if ($LASTEXITCODE -ne 0) {
     --hidden-import migration_coordinator `
     --hidden-import title_save_migration `
     --hidden-import UbiOnlineConfigService.spartacus_onlineconfig `
+    --hidden-import i18n `
+    --hidden-import translations.es `
+    --hidden-import translations.pt_BR `
+    --hidden-import gui_handoff `
     --distpath $DistRoot `
     --workpath (Join-Path $BuildRoot 'pyinstaller-work') `
     --specpath $BuildRoot `
@@ -62,6 +66,10 @@ if ($LASTEXITCODE -ne 0) {
     --add-data "$(Join-Path $ProjectRoot 'tools\patch_signatures.json');." `
     --paths (Join-Path $ProjectRoot 'tools') `
     --hidden-import game_detect `
+    --hidden-import i18n `
+    --hidden-import translations.es `
+    --hidden-import translations.pt_BR `
+    --hidden-import gui_handoff `
     --distpath $DistRoot `
     --workpath (Join-Path $BuildRoot 'pyinstaller-work') `
     --specpath $BuildRoot `
@@ -93,6 +101,9 @@ if ($LASTEXITCODE -ne 0) {
     --hidden-import save_editor `
     --hidden-import patch_installer `
     --hidden-import game_detect `
+    --hidden-import i18n `
+    --hidden-import translations.es `
+    --hidden-import translations.pt_BR `
     --hidden-import UbiOnlineConfigService.spartacus_onlineconfig `
     --distpath $DistRoot `
     --workpath (Join-Path $BuildRoot 'pyinstaller-work') `

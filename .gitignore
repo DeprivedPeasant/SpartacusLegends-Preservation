@@ -45,6 +45,14 @@ tools/*
 !tools/patch_signatures.json
 !tools/save_editor.py
 !tools/spartacus_gui.py
+!tools/i18n.py
+!tools/gui_handoff.py
+
+!tools/translations/
+tools/translations/*
+!tools/translations/__init__.py
+!tools/translations/es.py
+!tools/translations/pt_BR.py
 
 !tools/server_gui/
 tools/server_gui/*
@@ -61,6 +69,7 @@ tools/server_gui/*
 !scripts/
 scripts/*
 !scripts/build_patch_signatures.py
+!scripts/i18n_messages.py
 !tools/UbiOnlineConfigService/
 tools/UbiOnlineConfigService/*
 !tools/UbiOnlineConfigService/__init__.py
@@ -79,6 +88,7 @@ tests/*
 !tests/test_migration_upload_gate.py
 !tests/test_migration_launcher.py
 !tests/test_server_startup.py
+!tests/test_i18n.py
 !tests/test_title_versions.py
 !tests/test_title_save_migration.py
 !tests/test_user_events.py

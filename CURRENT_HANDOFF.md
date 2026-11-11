@@ -1,4 +1,47 @@
-# Current AI handoff — v0.7.2 release checkpoint
+# Current AI handoff — v0.7.3 release checkpoint
+
+## v0.7.3 release (2026-11-11)
+
+Spanish and Brazilian Portuguese for the app, and steering players to it.
+Released as GitHub release `v0.7.3` from `main` (tag `v0.7.3`).
+
+| Artifact | SHA-256 |
+| --- | --- |
+| `SpartacusLegends-Preservation-v0.7.3.zip` (64,747,029 bytes) | `55693E5649746CDCBC5DDC071297B5DFCE3385C798431FC674C7B0C352A3C473` |
+| `SpartacusLegendsServerGUI.exe` | `33E785F42B4008E93F1057526B48B2BD5B1589DDFB6FAEEE64C4A86B29F8439B` |
+| `SpartacusLegendsServer.exe` | `1B3209BB2388D1712B077586F2C0D1ADC6C7804F5A7B8FFFC2B88E206C368B18` |
+| `SpartacusLegendsPatchInstaller.exe` | `A9CDA7F99A3F9CBB9EE6FDACE0881530159E758C6274AE9199957AF41AD74EA0` |
+
+- `tools/i18n.py`: `tr(english, **values)` looks the English text up in
+  `tools/translations/{es,pt_BR}.py`; `N_()` marks import-time constants.
+  The language is the `SPARTACUS_LANGUAGE` environment variable, not module
+  state, because the frozen apps import modules both as `x` and `tools.x`,
+  and the GUI's server child inherits it. Unset means English, so the logs,
+  the console programs and the existing tests stay English.
+- The GUI picks the saved `language` in `gui-settings.ini`, else the Windows
+  UI language; a sidebar menu changes it and restarts the app. Qt's own
+  buttons use the bundled `qtbase_es` / `qtbase_pt_BR` translations.
+- Translated: every GUI string, the server's activity events, the
+  title-version startup error, Patch setup checks (`patch_installer`,
+  `game_detect`) and the common save-editor refusals/warnings. Left English
+  on purpose: log files, console-only output, port diagnostics, rare
+  corruption errors and migration reasons.
+- `scripts/i18n_messages.py` lists every `tr`/`N_` literal and checks both
+  catalogues (missing, unused, placeholder mismatch); `tests/test_i18n.py`
+  runs it.
+- `tools/gui_handoff.py`: a double-clicked `SpartacusLegendsServer.exe` or
+  `SpartacusLegendsPatchInstaller.exe` (frozen, no arguments, real console,
+  app beside it) offers to open the app; Enter opens it, `C` stays. Any
+  argument or `--console` skips the offer, so the GUI's own server launch is
+  unaffected. The README setup now leads with the app.
+- Checked in a packaged build: the console server and installer show their
+  errors in Spanish/Portuguese when `SPARTACUS_LANGUAGE` is set and English
+  otherwise; the packaged app opens in each language; Jake confirmed the
+  double-click offer opens the app. The one-file console exes cannot run from
+  `.build` (Low integrity label: PyInstaller cannot create its temp folder);
+  test them from an ordinary folder.
+- Not done: no translation has been reviewed by a native speaker, and the
+  server's translated activity events have not been seen in a live game.
 
 ## v0.7.2 release (2026-11-06)
 

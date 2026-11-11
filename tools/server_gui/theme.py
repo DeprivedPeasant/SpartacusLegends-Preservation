@@ -17,6 +17,11 @@ from dataclasses import dataclass
 from PySide6.QtGui import QColor, QFont, QPalette
 from PySide6.QtWidgets import QApplication, QWidget
 
+try:
+    from i18n import tr
+except ImportError:  # Imported as tools.server_gui.theme by tests.
+    from tools.i18n import tr
+
 
 @dataclass(frozen=True)
 class Theme:
@@ -111,7 +116,7 @@ DEFAULT_EVENT_GLYPH = "•"
 
 def status_text(status: str) -> str:
     """The pill text: glyph plus the status word (never the glyph alone)."""
-    return f"{STATUS_GLYPHS.get(status, DEFAULT_EVENT_GLYPH)}  {status}"
+    return f"{STATUS_GLYPHS.get(status, DEFAULT_EVENT_GLYPH)}  {tr(status)}"
 
 
 def stylesheet(theme: Theme) -> str:

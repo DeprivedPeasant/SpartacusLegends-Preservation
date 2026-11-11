@@ -38,9 +38,11 @@ try:
     import eboot_source
     import game_detect
     import patch_installer
+    from i18n import N_, tr
 except ImportError:  # Imported as tools.server_gui.patch_tab by tests.
     from tools import adaptive_patch, eboot_source, game_detect, \
         patch_installer
+    from tools.i18n import N_, tr
 
 
 SETTING_FOLDER = "setup/rpcs3_folder"
@@ -51,18 +53,18 @@ WARN = "⚠"
 BAD = "✖"
 BUSY = "◔"
 
-LEAVE_VERSION = "Leave the server's version unchanged"
-UNUSED_CONFIRM = (
+LEAVE_VERSION = N_("Leave the server's version unchanged")
+UNUSED_CONFIRM = N_(
     "{problem}\n\nInstalling here writes the patch and network settings into "
     "this RPCS3 only - the RPCS3 you play from would still be unpatched (on "
     "01.06 the game then hangs on \"Updating Game Data\").\n\n"
     "Install into this folder anyway?")
-VERSION_QUESTION = (
+VERSION_QUESTION = N_(
     "The game's version could not be detected from this RPCS3 folder, so the "
     "server's version setting will not be guessed. It decides which saves "
     "the server uses.\n\nWhich version of Spartacus Legends do you play?")
 
-ADAPTIVE_CONFIRM = (
+ADAPTIVE_CONFIRM = N_(
     "Your game is a different dump of Spartacus Legends, so the shipped "
     "patch does not match its executable ({hash}).\n\n"
     "The installer can generate a matching patch by locating the same "
@@ -139,35 +141,35 @@ class PatchTab(QWidget):
 
         self.rpcs3_folder = QLineEdit()
         self.rpcs3_folder.setPlaceholderText(
-            "The RPCS3 folder - the one containing rpcs3.exe")
-        self.rpcs3_browse = button("Browse...")
-        self.recheck_button = button("Check again")
+            tr("The RPCS3 folder - the one containing rpcs3.exe"))
+        self.rpcs3_browse = button(tr("Browse..."))
+        self.recheck_button = button(tr("Check again"))
 
         self.game_label = label(role="muted", wrap=True, selectable=True)
         self.exe_label = label(role="muted", wrap=True, selectable=True)
         self.boot_label = label(role="muted", wrap=True, selectable=True)
 
-        self.install_button = button("Install / repair setup", "primary",
-                                     "large")
+        self.install_button = button(tr("Install / repair setup"),
+                                     "primary", "large")
         self.summary = label(role="muted", wrap=True)
 
         self.checklist = QTreeWidget()
-        self.checklist.setHeaderLabels(["Result", "Check"])
-        self.checklist.setColumnWidth(0, 120)
+        self.checklist.setHeaderLabels([tr("Result"), tr("Check")])
+        self.checklist.setColumnWidth(0, 150)
         self.checklist.setRootIsDecorated(False)
         self.result_detail = label(role="muted", wrap=True, selectable=True)
 
-        self.manual_elf = QCheckBox(
+        self.manual_elf = QCheckBox(tr(
             "Automatic decryption does not work for me - use a decrypted "
-            ".elf instead (RPCS3 Utilities > Decrypt PS3 Binaries)")
+            ".elf instead (RPCS3 Utilities > Decrypt PS3 Binaries)"))
         self.elf_path = QLineEdit()
-        self.elf_path.setPlaceholderText("Decrypted EBOOT .elf")
-        self.elf_browse = button("Browse...")
+        self.elf_path.setPlaceholderText(tr("Decrypted EBOOT .elf"))
+        self.elf_browse = button(tr("Browse..."))
         self.elf_row = QWidget()
 
         self._build_layout()
         self._connect_signals()
-        self._set_unchecked("Choose your RPCS3 folder to begin.")
+        self._set_unchecked(tr("Choose your RPCS3 folder to begin."))
 
         folder = self._setting(SETTING_FOLDER, "")
         if folder:
@@ -180,8 +182,9 @@ class PatchTab(QWidget):
         layout.setSpacing(16)
         layout.addWidget(self.attention)
 
-        folder = Card("RPCS3", "Everything else - the game, its version "
-                      "and its executable - is found from this folder.")
+        folder = Card("RPCS3", tr("Everything else - the game, its version "
+                                  "and its executable - is found from this "
+                                  "folder."))
         row = QHBoxLayout()
         row.addWidget(self.rpcs3_folder, 1)
         row.addWidget(self.rpcs3_browse)
@@ -189,12 +192,12 @@ class PatchTab(QWidget):
         folder.body.addLayout(row)
         layout.addWidget(folder)
 
-        game = Card("Your game")
+        game = Card(tr("Your game"))
         form = QFormLayout()
         form.setSpacing(10)
-        form.addRow(label("GAME", role="statLabel"), self.game_label)
-        form.addRow(label("EXECUTABLE", role="statLabel"), self.exe_label)
-        form.addRow(label("LAST BOOT", role="statLabel"), self.boot_label)
+        form.addRow(label(tr("GAME"), role="statLabel"), self.game_label)
+        form.addRow(label(tr("EXECUTABLE"), role="statLabel"), self.exe_label)
+        form.addRow(label(tr("LAST BOOT"), role="statLabel"), self.boot_label)
         game.body.addLayout(form)
         actions = QHBoxLayout()
         actions.setSpacing(12)
@@ -203,7 +206,7 @@ class PatchTab(QWidget):
         game.body.addLayout(actions)
         layout.addWidget(game)
 
-        checks = Card("Setup checklist")
+        checks = Card(tr("Setup checklist"))
         checks.body.addWidget(self.checklist, 1)
         checks.body.addWidget(self.result_detail)
         checks.body.addWidget(self.manual_elf)
@@ -258,7 +261,7 @@ class PatchTab(QWidget):
         """Re-detect the game and re-check its executable in the background."""
         root = self.rpcs3_root()
         if root is None:
-            self._set_unchecked("Choose your RPCS3 folder to begin.")
+            self._set_unchecked(tr("Choose your RPCS3 folder to begin."))
             return
         if self._worker is not None and self._worker.isRunning():
             return
@@ -270,7 +273,8 @@ class PatchTab(QWidget):
         self._set_setting(SETTING_FOLDER, str(root))
         elf = self._manual_elf()
         cache = _SettingsCache(self.settings)
-        self._set_busy("Finding the game and checking its executable...")
+        self._set_busy(tr("Finding the game and checking its "
+                          "executable..."))
 
         def work():
             # The boot log is read first: it is the user's evidence of the
@@ -279,6 +283,7 @@ class PatchTab(QWidget):
             game = game_detect.detect_game(root)
             check = None
             check_error = None
+            rpcs3_open = False
             if game is not None and (game.eboot_path or elf):
                 try:
                     check = game_detect.check_executable(
@@ -286,9 +291,12 @@ class PatchTab(QWidget):
                 except (OSError, ValueError, eboot_source.EbootSourceError,
                         game_detect.DetectionError) as error:
                     check_error = str(error)
+                    rpcs3_open = isinstance(error,
+                                            game_detect.RPCS3RunningError)
             unused = patch_installer.unused_folder_problem(root)
             detected = patch_installer.detected_game_version(root)
-            return root, game, check, check_error, boot, unused, detected
+            return (root, game, check, (check_error, rpcs3_open), boot,
+                    unused, detected)
 
         self._start(work, self._on_checked)
 
@@ -312,7 +320,8 @@ class PatchTab(QWidget):
         if error is not None:
             self._set_unchecked(f"{BAD}  {error}")
             return
-        root, game, check, check_error, boot, unused, detected = result
+        root, game, check, (check_error, rpcs3_open), boot, unused, \
+            detected = result
         self._game, self._check, self._boot = game, check, boot
         self._unused, self._detected_version = unused, detected
         if unused:
@@ -320,16 +329,17 @@ class PatchTab(QWidget):
             self.game_label.setText(f"{BAD}  {unused}")
             self.exe_label.setText("-")
             self.boot_label.setText("-")
-            self.show_attention("\u26a0  Is this the right RPCS3 folder?",
-                                unused)
+            self.show_attention(
+                "\u26a0  " + tr("Is this the right RPCS3 folder?"), unused)
             self.install_button.setEnabled(True)
             self._verify()
             return
         if game is None:
-            self.game_label.setText(
-                f"{BAD}  Spartacus Legends was not found in {root}. Install "
-                f"the USA release ({patch_installer.TITLE_ID}) in this RPCS3 "
-                "and let RPCS3 list it, then check again.")
+            self.game_label.setText(f"{BAD}  " + tr(
+                "Spartacus Legends was not found in {folder}. Install the "
+                "USA release ({title_id}) in this RPCS3 and let RPCS3 list "
+                "it, then check again.", folder=root,
+                title_id=patch_installer.TITLE_ID))
             self.exe_label.setText("-")
             self.boot_label.setText("-")
             self.install_button.setEnabled(True)
@@ -338,8 +348,8 @@ class PatchTab(QWidget):
         mark = OK if game.supported_version else WARN
         text = f"{mark}  {game.describe()}"
         if not game.supported_version:
-            text += (" - only 01.00 and 01.06 are supported, so the patch "
-                     "will not apply.")
+            text += " - " + tr("only 01.00 and 01.06 are supported, so the "
+                               "patch will not apply.")
         self.game_label.setText(text)
 
         if check is not None:
@@ -351,19 +361,19 @@ class PatchTab(QWidget):
                 self.exe_label.setText(f"{WARN}  {check.summary()}")
             else:
                 self.exe_label.setText(f"{BAD}  {check.summary()}")
-        elif check_error and "RPCS3 is open" in check_error:
+        elif check_error and rpcs3_open:
             self.exe_label.setText(f"{WARN}  {check_error}")
         elif check_error:
-            self.exe_label.setText(
-                f"{WARN}  Could not check the executable: {check_error} "
-                "Tick the option below to use a decrypted .elf instead.")
+            self.exe_label.setText(f"{WARN}  " + tr(
+                "Could not check the executable: {error} Tick the option "
+                "below to use a decrypted .elf instead.", error=check_error))
         else:
-            self.exe_label.setText(f"{WARN}  No EBOOT.BIN was found in "
-                                   f"{game.game_dir}.")
+            self.exe_label.setText(f"{WARN}  " + tr(
+                "No EBOOT.BIN was found in {folder}.", folder=game.game_dir))
 
         if boot is None:
             self.boot_label.setText(
-                "No Spartacus Legends boot in RPCS3's log yet.")
+                tr("No Spartacus Legends boot in RPCS3's log yet."))
         elif boot.unreadable:
             self.boot_label.setText(f"{WARN}  {boot.summary()}")
         elif boot.compatibility_applied:
@@ -380,32 +390,32 @@ class PatchTab(QWidget):
         advisory_ok = True
         for passed, message, required in checks:
             if passed:
-                result = f"{OK}  OK"
+                result = f"{OK}  " + tr("OK")
             elif required:
-                result = f"{BAD}  MISSING"
+                result = f"{BAD}  " + tr("MISSING")
                 required_ok = False
             else:
-                result = f"{WARN}  WARNING"
+                result = f"{WARN}  " + tr("WARNING")
                 advisory_ok = False
             item = QTreeWidgetItem([result, message])
             item.setToolTip(1, message)
             self.checklist.addTopLevelItem(item)
         if not required_ok:
-            self.summary.setText(
-                f"{BAD}  Setup incomplete - press Install / repair setup.")
+            self.summary.setText(f"{BAD}  " + tr(
+                "Setup incomplete - press Install / repair setup."))
         elif not advisory_ok:
-            self.summary.setText(
-                f"{WARN}  Installed, but the WARNING items can still stop "
-                "the game from reaching the main menu.")
+            self.summary.setText(f"{WARN}  " + tr(
+                "Installed, but the WARNING items can still stop the game "
+                "from reaching the main menu."))
         else:
-            self.summary.setText(
-                f"{OK}  Setup OK - start the server, then cold-boot the game.")
+            self.summary.setText(f"{OK}  " + tr(
+                "Setup OK - start the server, then cold-boot the game."))
         return required_ok
 
     # ------------------------------------------------------------- actions
     def _browse_rpcs3(self) -> None:
         folder = QFileDialog.getExistingDirectory(
-            self, "Select the RPCS3 folder (containing rpcs3.exe)",
+            self, tr("Select the RPCS3 folder (containing rpcs3.exe)"),
             self.rpcs3_folder.text())
         if folder:
             self.rpcs3_folder.setText(folder)
@@ -413,8 +423,8 @@ class PatchTab(QWidget):
 
     def _browse_elf(self) -> None:
         path, _filter = QFileDialog.getOpenFileName(
-            self, "Select the decrypted EBOOT .elf", "",
-            "ELF files (*.elf *.ELF);;All files (*)")
+            self, tr("Select the decrypted EBOOT .elf"), "",
+            tr("ELF files (*.elf *.ELF);;All files (*)"))
         if path:
             self.elf_path.setText(path)
             self.recheck()
@@ -436,7 +446,8 @@ class PatchTab(QWidget):
                                  if self._check is not None else None),
                 boot_status=self._boot)
         except (OSError, ValueError) as error:
-            self.result_detail.setText(f"Verification failed: {error}")
+            self.result_detail.setText(tr("Verification failed: {error}",
+                                          error=error))
             return False
         return self._show_checks(checks)
 
@@ -446,15 +457,16 @@ class PatchTab(QWidget):
             return
         if patch_installer.rpcs3_is_running():
             QMessageBox.warning(
-                self, "Close RPCS3 first",
-                "Close RPCS3 before installing the setup. RPCS3 rewrites its "
-                "configuration when it closes, which would undo the change.")
+                self, tr("Close RPCS3 first"),
+                tr("Close RPCS3 before installing the setup. RPCS3 rewrites "
+                   "its configuration when it closes, which would undo the "
+                   "change."))
             return
         allow_unused = False
         if self._unused:
             answer = QMessageBox.question(
-                self, "Is this the right RPCS3 folder?",
-                UNUSED_CONFIRM.format(problem=self._unused),
+                self, tr("Is this the right RPCS3 folder?"),
+                tr(UNUSED_CONFIRM, problem=self._unused),
                 QMessageBox.StandardButton.Yes
                 | QMessageBox.StandardButton.Cancel,
                 QMessageBox.StandardButton.Cancel)
@@ -463,26 +475,27 @@ class PatchTab(QWidget):
             allow_unused = True
         title_version = None
         if self._detected_version is None:
-            choices = [LEAVE_VERSION,
-                       *sorted(patch_installer.SUPPORTED_BUILDS)]
+            leave = tr(LEAVE_VERSION)
+            choices = [leave, *sorted(patch_installer.SUPPORTED_BUILDS)]
             choice, accepted = QInputDialog.getItem(
-                self, "Which game version?", VERSION_QUESTION, choices, 0,
-                False)
+                self, tr("Which game version?"), tr(VERSION_QUESTION),
+                choices, 0, False)
             if not accepted:
                 return
-            if choice != LEAVE_VERSION:
+            if choice != leave:
                 title_version = choice
         check = self._check
         adaptive = False
         if check is not None and check.status == game_detect.STATUS_UNKNOWN:
             if not check.can_generate:
                 answer = QMessageBox.question(
-                    self, "This dump cannot be patched automatically",
-                    "Your game's executable is a different dump and the "
-                    f"patch sites could not be located safely:\n\n"
-                    f"{check.problem}\n\nThe network settings can still be "
-                    "installed, but the compatibility patch will not apply "
-                    "to this executable. Continue anyway?",
+                    self, tr("This dump cannot be patched automatically"),
+                    tr("Your game's executable is a different dump and the "
+                       "patch sites could not be located safely:\n\n"
+                       "{problem}\n\nThe network settings can still be "
+                       "installed, but the compatibility patch will not "
+                       "apply to this executable. Continue anyway?",
+                       problem=check.problem),
                     QMessageBox.StandardButton.Yes
                     | QMessageBox.StandardButton.Cancel,
                     QMessageBox.StandardButton.Cancel)
@@ -490,8 +503,8 @@ class PatchTab(QWidget):
                     return
             else:
                 answer = QMessageBox.question(
-                    self, "Generate a patch for your dump?",
-                    ADAPTIVE_CONFIRM.format(hash=check.ppu_hash),
+                    self, tr("Generate a patch for your dump?"),
+                    tr(ADAPTIVE_CONFIRM, hash=check.ppu_hash),
                     QMessageBox.StandardButton.Yes
                     | QMessageBox.StandardButton.Cancel,
                     QMessageBox.StandardButton.Cancel)
@@ -512,7 +525,7 @@ class PatchTab(QWidget):
                 allow_unused_folder=allow_unused,
                 title_version=title_version)
 
-        self._set_busy("Installing the setup...")
+        self._set_busy(tr("Installing the setup..."))
         self._start(work, self._on_installed)
 
     def _on_installed(self, result, error) -> None:
@@ -525,26 +538,33 @@ class PatchTab(QWidget):
                 outcome = ""
             elif refused or isinstance(
                     error, patch_installer.UnusedRPCS3FolderError):
-                outcome = "\n\nNothing was changed."
+                outcome = "\n\n" + tr("Nothing was changed.")
             else:
-                outcome = ("\n\nSome files may have been changed; each "
-                           "changed file has a dated .bak copy beside it.")
+                outcome = "\n\n" + tr(
+                    "Some files may have been changed; each changed file has "
+                    "a dated .bak copy beside it.")
             self.result_detail.setText(
-                "Install failed; nothing was guessed."
-                if refused else f"Install failed: {error}")
-            QMessageBox.critical(self, "Install failed", f"{error}{outcome}")
+                tr("Install failed; nothing was guessed.")
+                if refused else tr("Install failed: {error}", error=error))
+            QMessageBox.critical(self, tr("Install failed"),
+                                 f"{error}{outcome}")
             self.recheck()
             return
-        lines = [f"Installed the patches in {result.imported_patch}",
-                 f"Server set to game version {result.title_version}"
+        lines = [tr("Installed the patches in {path}",
+                    path=result.imported_patch),
+                 tr("Server set to game version {version}",
+                    version=result.title_version)
                  if result.server_config_written else
-                 f"Server version left unchanged in {result.server_config}",
-                 "PPU cache cleared" if result.cache_cleared
-                 else "PPU cache was already clear"]
+                 tr("Server version left unchanged in {path}",
+                    path=result.server_config),
+                 tr("PPU cache cleared") if result.cache_cleared
+                 else tr("PPU cache was already clear")]
         if result.adaptive_report is not None:
-            lines.append(f"Generated a patch for {result.adaptive_hash} "
-                         f"(experimental). Report: {result.adaptive_report}")
-        lines.extend(f"Backup: {path}" for path in result.backups)
+            lines.append(tr("Generated a patch for {hash} (experimental). "
+                            "Report: {path}", hash=result.adaptive_hash,
+                            path=result.adaptive_report))
+        lines.extend(tr("Backup: {path}", path=path)
+                     for path in result.backups)
         self.result_detail.setText("\n".join(lines))
         self.mark_completed(True)
         self.clear_attention()

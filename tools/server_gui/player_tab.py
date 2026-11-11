@@ -34,24 +34,26 @@ from .widgets import Banner, Card, button, label
 try:
     import save_editor
     import server_control
+    from i18n import N_, tr
 except ImportError:  # Imported as tools.server_gui.player_tab by tests.
     from tools import save_editor, server_control
+    from tools.i18n import N_, tr
 
 
 SPIN_MAXIMUM = 2_147_483_647  # QSpinBox is a signed 32-bit int widget.
-LIVE_PENDING_TEXT = (
+LIVE_PENDING_TEXT = N_(
     "Pending - appears after your next fight or shop purchase")
-LIVE_PENDING_TEXT_V106 = (
+LIVE_PENDING_TEXT_V106 = N_(
     "Pending - appears after your next fight, shop purchase or login")
-LIVE_SYNCED_TEXT = "Synced - the game has received these values"
-FAME_LIVE_REASON = (
+LIVE_SYNCED_TEXT = N_("Synced - the game has received these values")
+FAME_LIVE_REASON = N_(
     "Fame is offline-only on 01.00: no live fame update is known for that "
     "client. Stop the server and edit fame offline.")
 
 BALANCES = (
-    ("gold", "GOLD", "◆"),
-    ("silver", "SILVER", "◇"),
-    ("fame", "FAME", "★"),
+    ("gold", N_("GOLD"), "◆"),
+    ("silver", N_("SILVER"), "◇"),
+    ("fame", N_("FAME"), "★"),
 )
 
 
@@ -63,15 +65,15 @@ class StatCard(Card):
         top = QHBoxLayout()
         top.addWidget(label(glyph, role="statGlyph"))
         top.addSpacing(6)
-        top.addWidget(label(caption, role="statLabel"))
+        top.addWidget(label(tr(caption), role="statLabel"))
         top.addStretch(1)
         self.body.addLayout(top)
         self.spin = QSpinBox()
         self.spin.setRange(0, SPIN_MAXIMUM)
         self.spin.setGroupSeparatorShown(True)
-        self.spin.setToolTip(
+        self.spin.setToolTip(tr(
             "The save format stores a 32-bit value; this field accepts up to "
-            f"{SPIN_MAXIMUM:,}.")
+            "{maximum:,}.", maximum=SPIN_MAXIMUM))
         theme.set_props(self.spin, role="statValue")
         self.body.addWidget(self.spin)
         self.saved = label(role="muted", wrap=True)
@@ -103,10 +105,10 @@ class PlayerTab(QWidget):
         self.silver = self.cards["silver"].spin
         self.fame = self.cards["fame"].spin
         self.fame_reason = self.cards["fame"].reason
-        self.fame_reason.setText(FAME_LIVE_REASON)
+        self.fame_reason.setText(tr(FAME_LIVE_REASON))
         self.live_status = label(role="muted", wrap=True)
 
-        self.source_card = Card("Where these values are stored")
+        self.source_card = Card(tr("Where these values are stored"))
         self.native_label = label(wrap=True, selectable=True)
         self.companion_label = label(wrap=True, selectable=True)
         self.mismatch_label = label(role="muted", wrap=True)
@@ -114,9 +116,10 @@ class PlayerTab(QWidget):
                        self.mismatch_label):
             self.source_card.body.addWidget(widget)
 
-        self.save_button = button("Save to save files", "primary", "large")
-        self.revert_button = button("Reload from disk")
-        self.restore_button = button("Restore backup...")
+        self.save_button = button(tr("Save to save files"), "primary",
+                                  "large")
+        self.revert_button = button(tr("Reload from disk"))
+        self.restore_button = button(tr("Restore backup..."))
 
         self._build_layout()
         self._connect_signals()
@@ -172,26 +175,29 @@ class PlayerTab(QWidget):
         self.fame_reason.setVisible(running and not live_fame)
         self.restore_button.setEnabled(not running)
         self.revert_button.setText(
-            "Reload live values" if running else "Reload from disk")
+            tr("Reload live values") if running else tr("Reload from disk"))
         self.save_button.setText(
-            "Send to server" if running else "Save to save files")
+            tr("Send to server") if running else tr("Save to save files"))
         self.save_button.setEnabled(True)
         if running:
-            edited = ("gold, silver and fame" if live_fame
-                      else "gold and silver")
             self.mode_banner.set_message(
-                "⇄  Live editing",
-                f"The server is running, so {edited} are changed through the "
-                "server itself. The game picks them up at its next fight or "
-                "shop purchase" + (" or login" if live_fame else "") + ".")
-            self.live_status.setText("Live values from the server.")
+                "⇄  " + tr("Live editing"),
+                tr("The server is running, so gold, silver and fame are "
+                   "changed through the server itself. The game picks them "
+                   "up at its next fight, shop purchase or login.")
+                if live_fame else
+                tr("The server is running, so gold and silver are changed "
+                   "through the server itself. The game picks them up at its "
+                   "next fight or shop purchase."))
+            self.live_status.setText(tr("Live values from the server."))
             self._refresh_source_from_disk(last_saved=True)
             self._request_live_state()
         else:
             self.mode_banner.set_message(
-                "✎  Offline editing",
-                "The server is stopped, so the save files are edited directly. "
-                "They are backed up before anything is changed.")
+                "✎  " + tr("Offline editing"),
+                tr("The server is stopped, so the save files are edited "
+                   "directly. They are backed up before anything is "
+                   "changed."))
             self.live_status.setText("")
             self.refresh_offline()
 
@@ -210,56 +216,60 @@ class PlayerTab(QWidget):
             state = save_editor.load(self.data_dir, self._title_version)
         except save_editor.SaveEditorError as error:
             self._state = None
-            self.native_label.setText("Native profile: could not be read.")
+            self.native_label.setText(
+                tr("Native profile: could not be read."))
             self.companion_label.setText(
-                "Server economy file: could not be read.")
-            self.mismatch_label.setText(f"Error: {error}")
+                tr("Server economy file: could not be read."))
+            self.mismatch_label.setText(tr("Error: {error}", error=error))
             for card in self.cards.values():
                 card.saved.setText("")
             return None
         self._state = state
-        prefix = "Last saved" if last_saved else "Saved"
         for name, card in self.cards.items():
+            value = state.effective_balances[name]
             card.saved.setText(
-                f"{prefix}: {state.effective_balances[name]:,}")
+                tr("Last saved: {value:,}", value=value) if last_saved
+                else tr("Saved: {value:,}", value=value))
 
         companion = state.companion_balances
         companion_name = state.paths.companion_path.name
-        self.companion_label.setText(
-            f"▪ Server economy ({companion_name}): gold "
-            f"{companion['gold']:,}, silver {companion['silver']:,}, fame "
-            f"{companion['fame']:,}")
+        self.companion_label.setText("▪ " + tr(
+            "Server economy ({file}): gold {gold:,}, silver {silver:,}, fame "
+            "{fame:,}", file=companion_name, gold=companion["gold"],
+            silver=companion["silver"], fame=companion["fame"]))
         if not state.native_holds_balances:
-            size = (f"{state.native_size:,} bytes" if state.native_present
-                    else "not created yet")
-            self.native_label.setText(
-                f"▪ Game {self._title_version} keeps balances on the "
-                "server only. They are sent to the game at login and after "
-                f"each fight. The game's own profile ({size}) is never "
-                "changed by this editor.")
+            size = (tr("{size:,} bytes", size=state.native_size)
+                    if state.native_present else tr("not created yet"))
+            self.native_label.setText("▪ " + tr(
+                "Game {version} keeps balances on the server only. They are "
+                "sent to the game at login and after each fight. The game's "
+                "own profile ({size}) is never changed by this editor.",
+                version=self._title_version, size=size))
             self.mismatch_label.setText("")
             return state
         if state.native_present:
             native = state.native_balances or {}
-            self.native_label.setText(
-                "▪ Game profile (1.bin): gold {gold:,}, silver "
-                "{silver:,}, fame {fame:,}".format(**native))
+            self.native_label.setText("▪ " + tr(
+                "Game profile (1.bin): gold {gold:,}, silver {silver:,}, "
+                "fame {fame:,}", **native))
         else:
-            self.native_label.setText(
-                "▪ Game profile (1.bin): not created yet (fresh player). "
-                "Only the server economy file will be edited.")
+            self.native_label.setText("▪ " + tr(
+                "Game profile (1.bin): not created yet (fresh player). Only "
+                "the server economy file will be edited."))
         if state.mismatch:
-            fields = ", ".join(state.mismatch_fields)
-            self.mismatch_label.setText(
-                f"⚠  The game profile and server economy differ ({fields})."
-                + (" The running server uses its own in-memory values."
-                   if last_saved else " Saving writes both so they agree."))
+            fields = ", ".join(tr(field) for field in state.mismatch_fields)
+            self.mismatch_label.setText("⚠  " + (
+                tr("The game profile and server economy differ ({fields}). "
+                   "The running server uses its own in-memory values.",
+                   fields=fields)
+                if last_saved else
+                tr("The game profile and server economy differ ({fields}). "
+                   "Saving writes both so they agree.", fields=fields)))
         else:
-            self.mismatch_label.setText(
-                "✓  The game profile and server economy agree."
+            self.mismatch_label.setText("✓  " + (
+                tr("The game profile and server economy agree.")
                 if not last_saved else
-                "✓  The last saved game profile and server economy "
-                "agree.")
+                tr("The last saved game profile and server economy agree.")))
         return state
 
     def _show_balances(self, balances: dict) -> None:
@@ -285,11 +295,13 @@ class PlayerTab(QWidget):
                 server_running=self.process.is_running(),
             )
         except save_editor.SaveEditorError as error:
-            QMessageBox.critical(self, "Save refused", str(error))
+            QMessageBox.critical(self, tr("Save refused"), str(error))
             return
-        lines = ["Balances saved.", f"Pre-edit backup: {result.backup_dir}"]
+        lines = [tr("Balances saved."),
+                 tr("Pre-edit backup: {path}", path=result.backup_dir)]
         lines.extend(result.warnings)
-        QMessageBox.information(self, "Save complete", "\n\n".join(lines))
+        QMessageBox.information(self, tr("Save complete"),
+                                "\n\n".join(lines))
         self.refresh_offline()
 
     def _save_live(self) -> None:
@@ -302,8 +314,8 @@ class PlayerTab(QWidget):
             return
         self._pending_live_balances = True
         self.live_status.setText(
-            "◔  " + (LIVE_PENDING_TEXT_V106 if self._live_fame()
-                          else LIVE_PENDING_TEXT))
+            "◔  " + tr(LIVE_PENDING_TEXT_V106 if self._live_fame()
+                       else LIVE_PENDING_TEXT))
 
     def _revert(self) -> None:
         if self._server_running:
@@ -318,8 +330,8 @@ class PlayerTab(QWidget):
         if not self._server_running:
             return
         if not reply.get("ok"):
-            error = reply.get("error", "unknown error")
-            self.live_status.setText(f"✖  Error: {error}")
+            error = reply.get("error", tr("unknown error"))
+            self.live_status.setText("✖  " + tr("Error: {error}", error=error))
             return
         updated = False
         for name, spin in (("gold", self.gold), ("silver", self.silver),
@@ -328,13 +340,13 @@ class PlayerTab(QWidget):
                 spin.setValue(max(0, min(SPIN_MAXIMUM, int(reply[name]))))
                 updated = True
         if updated and not self._pending_live_balances:
-            self.live_status.setText("Live values from the server.")
+            self.live_status.setText(tr("Live values from the server."))
 
     def _on_event(self, event: dict) -> None:
         if event.get("kind") != "balance_synced":
             return
         self._pending_live_balances = False
-        self.live_status.setText("✓  " + LIVE_SYNCED_TEXT)
+        self.live_status.setText("✓  " + tr(LIVE_SYNCED_TEXT))
         for name, spin in (("gold", self.gold), ("silver", self.silver),
                            ("fame", self.fame)):
             if name in event:
@@ -345,20 +357,21 @@ class PlayerTab(QWidget):
         backups = save_editor.list_backups(self.data_dir)
         if not backups:
             QMessageBox.information(
-                self, "No backups",
-                "There are no save-editor backups in data/backups yet.")
+                self, tr("No backups"),
+                tr("There are no save-editor backups in data/backups yet."))
             return
         names = [backup.name for backup in backups]
         name, accepted = QInputDialog.getItem(
-            self, "Restore backup",
-            "Choose a backup. Every file is checked against its SHA-256 "
-            "manifest before anything is written.", names, 0, False)
+            self, tr("Restore backup"),
+            tr("Choose a backup. Every file is checked against its SHA-256 "
+               "manifest before anything is written."), names, 0, False)
         if not accepted or not name:
             return
         confirm = QMessageBox.question(
-            self, "Restore this backup?",
-            f"Replace the current save files with the backup {name}?\n\n"
-            "The current files are not backed up again by this step.",
+            self, tr("Restore this backup?"),
+            tr("Replace the current save files with the backup {name}?\n\n"
+               "The current files are not backed up again by this step.",
+               name=name),
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
             QMessageBox.StandardButton.Cancel)
         if confirm != QMessageBox.StandardButton.Yes:
@@ -367,11 +380,11 @@ class PlayerTab(QWidget):
             result = save_editor.restore_backup(
                 self.data_dir, name, server_running=self.process.is_running())
         except save_editor.SaveEditorError as error:
-            QMessageBox.critical(self, "Restore refused", str(error))
+            QMessageBox.critical(self, tr("Restore refused"), str(error))
             return
         QMessageBox.information(
-            self, "Restore complete",
-            "Restored: " + ", ".join(result.restored_files))
+            self, tr("Restore complete"),
+            tr("Restored: {files}", files=", ".join(result.restored_files)))
         if self._server_running:
             self._request_live_state()
         else:

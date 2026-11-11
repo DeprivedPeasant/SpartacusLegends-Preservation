@@ -33,20 +33,22 @@ from .widgets import Banner, Card, button, label
 
 try:
     import save_editor
+    from i18n import N_, tr
 except ImportError:  # Imported as tools.server_gui.items_tab by tests.
     from tools import save_editor
+    from tools.i18n import N_, tr
 
 
 SPIN_MAXIMUM = 2_147_483_647
-EXPERIMENTAL_LIVE_TEXT = (
+EXPERIMENTAL_LIVE_TEXT = N_(
     "Experimental: live item edits are not live-proven yet. An added item or "
     "changed Boost quantity should appear at the next shop inventory request "
     "or at the next login's purchase replay.")
-LIVE_SLOT_BLOCKED_TEXT = (
+LIVE_SLOT_BLOCKED_TEXT = N_(
     "A purchased Ludus slot (IDs 80002-80007) cannot be removed while the "
     "server is running. It is a purchased entitlement that the server replays "
     "at login. Stop the server and remove it offline instead.")
-OFFLINE_SLOT_WARNING = (
+OFFLINE_SLOT_WARNING = N_(
     "This is a purchased Ludus slot entitlement (IDs 80002-80007). Removing it "
     "changes your purchased Ludus capacity: the server replays only the saved "
     "slot purchases at login. Remove it?")
@@ -69,14 +71,15 @@ class ItemsTab(QWidget):
 
         self.mode_banner = Banner()
         self.experimental_label = label(
-            "\u26a0  " + EXPERIMENTAL_LIVE_TEXT, role="muted", wrap=True)
+            "\u26a0  " + tr(EXPERIMENTAL_LIVE_TEXT), role="muted", wrap=True)
         self.experimental_label.setVisible(False)
         self.legend_label = label(
-            "Items are grouped by ID range only; no item names are asserted.",
+            tr("Items are grouped by ID range only; no item names are "
+               "asserted."),
             role="muted", wrap=True)
 
         self.tree = QTreeWidget()
-        self.tree.setHeaderLabels(["Item ID", "Uses"])
+        self.tree.setHeaderLabels([tr("Item ID"), tr("Uses")])
         self.tree.setRootIsDecorated(True)
         self.tree.setAlternatingRowColors(True)
         self.tree.setSelectionMode(
@@ -87,17 +90,18 @@ class ItemsTab(QWidget):
 
         self.item_id = QSpinBox()
         self.item_id.setRange(0, SPIN_MAXIMUM)
-        self.item_id.setToolTip("Item ID to add, for example 60006 for a Boost.")
+        self.item_id.setToolTip(
+            tr("Item ID to add, for example 60006 for a Boost."))
         self.quantity = QSpinBox()
         self.quantity.setRange(0, save_editor.MAX_QUANTITY)
-        self.add_button = button("+  Add item", "primary")
-        self.remove_button = button("Remove selected", "danger")
-        self.quantity_button = button("Set Boost uses")
-        self.save_button = button("Save items to save files", "primary",
+        self.add_button = button("+  " + tr("Add item"), "primary")
+        self.remove_button = button(tr("Remove selected"), "danger")
+        self.quantity_button = button(tr("Set Boost uses"))
+        self.save_button = button(tr("Save items to save files"), "primary",
                                   "large")
-        self.revert_button = button("Reload from disk")
+        self.revert_button = button(tr("Reload from disk"))
         self.status_label = label(role="muted", wrap=True)
-        self.selected_label = label("No item selected.", role="muted",
+        self.selected_label = label(tr("No item selected."), role="muted",
                                     wrap=True)
 
         self._build_layout()
@@ -111,22 +115,23 @@ class ItemsTab(QWidget):
         layout.addWidget(self.mode_banner)
         layout.addWidget(self.experimental_label)
 
-        owned = Card("Owned items")
+        owned = Card(tr("Owned items"))
         owned.body.addWidget(self.tree, 1)
         owned.body.addWidget(self.legend_label)
 
-        editor = Card("Edit", "Boosts are IDs 60000-60063 and keep a use "
-                      "count (0-99). Ludus slots are 80002-80007.")
+        editor = Card(tr("Edit"), tr(
+            "Boosts are IDs 60000-60063 and keep a use count (0-99). Ludus "
+            "slots are 80002-80007."))
         editor.setMinimumWidth(300)
         editor.setMaximumWidth(380)
         form = QFormLayout()
         form.setSpacing(10)
-        form.addRow(label("ITEM ID", role="statLabel"), self.item_id)
-        form.addRow(label("USES", role="statLabel"), self.quantity)
+        form.addRow(label(tr("ITEM ID"), role="statLabel"), self.item_id)
+        form.addRow(label(tr("USES"), role="statLabel"), self.quantity)
         editor.body.addLayout(form)
         editor.body.addWidget(self.add_button)
         editor.body.addSpacing(8)
-        editor.body.addWidget(label("SELECTED", role="statLabel"))
+        editor.body.addWidget(label(tr("SELECTED"), role="statLabel"))
         editor.body.addWidget(self.selected_label)
         editor.body.addWidget(self.quantity_button)
         editor.body.addWidget(self.remove_button)
@@ -170,20 +175,20 @@ class ItemsTab(QWidget):
         self.experimental_label.setVisible(running)
         self.save_button.setEnabled(not running)
         self.revert_button.setText(
-            "Reload live items" if running else "Reload from disk")
+            tr("Reload live items") if running else tr("Reload from disk"))
         if running:
             self.mode_banner.set_message(
-                "\u21c4  Live editing (experimental)",
-                "The server is running, so item edits go through the server. "
-                "Saving to the save files is disabled while the server owns "
-                "them.")
-            self.status_label.setText("Live items from the server.")
+                "\u21c4  " + tr("Live editing (experimental)"),
+                tr("The server is running, so item edits go through the "
+                   "server. Saving to the save files is disabled while the "
+                   "server owns them."))
+            self.status_label.setText(tr("Live items from the server."))
             self._request_live_state()
         else:
             self.mode_banner.set_message(
-                "\u270e  Offline editing",
-                "The server is stopped. Changes are written only when you "
-                "press Save, after the save files are backed up.")
+                "\u270e  " + tr("Offline editing"),
+                tr("The server is stopped. Changes are written only when you "
+                   "press Save, after the save files are backed up."))
             self.status_label.setText("")
             self.refresh_offline()
 
@@ -194,7 +199,7 @@ class ItemsTab(QWidget):
             self._owned = []
             self._quantities = {}
             self._rebuild_tree()
-            self.status_label.setText(f"Error: {error}")
+            self.status_label.setText(tr("Error: {error}", error=error))
             self.save_button.setEnabled(False)
             return
         self._owned = list(state.owned_items)
@@ -202,8 +207,9 @@ class ItemsTab(QWidget):
         self.save_button.setEnabled(not self._server_running)
         self._rebuild_tree()
         if not self._server_running:
-            self.status_label.setText(
-                f"Loaded {len(self._owned)} owned item(s) from the save files.")
+            self.status_label.setText(tr(
+                "Loaded {count} owned item(s) from the save files.",
+                count=len(self._owned)))
 
     def _request_live_state(self) -> None:
         self.process.write_command({"cmd": "get_economy"})
@@ -223,8 +229,8 @@ class ItemsTab(QWidget):
         for group, items in save_editor.group_items(self._owned).items():
             if not items:
                 continue
-            group_item = QTreeWidgetItem([f"{group}   \u00b7  {len(items)}",
-                                          ""])
+            group_item = QTreeWidgetItem(
+                [f"{tr(group)}   \u00b7  {len(items)}", ""])
             group_item.setFont(0, bold)
             group_item.setFlags(Qt.ItemFlag.ItemIsEnabled)
             self.tree.addTopLevelItem(group_item)
@@ -265,20 +271,22 @@ class ItemsTab(QWidget):
                     self._owned, self._quantities, item_id)
                 if save_editor.is_boost(item_id) else 1)
         if item_id is None:
-            self.selected_label.setText("No item selected.")
+            self.selected_label.setText(tr("No item selected."))
         elif save_editor.is_ludus_slot(item_id):
-            self.selected_label.setText(
-                f"Item {item_id} - purchased Ludus slot entitlement.")
+            self.selected_label.setText(tr(
+                "Item {item} - purchased Ludus slot entitlement.",
+                item=item_id))
         elif boost:
             uses = save_editor.effective_quantity(
                 self._owned, self._quantities, item_id)
-            self.selected_label.setText(
-                f"Item {item_id} - Boost with {uses} use(s).")
+            self.selected_label.setText(tr(
+                "Item {item} - Boost with {uses} use(s).",
+                item=item_id, uses=uses))
         else:
-            self.selected_label.setText(f"Item {item_id}.")
+            self.selected_label.setText(tr("Item {item}.", item=item_id))
         if not boost:
             self.quantity_button.setToolTip(
-                "Quantity is editable for Boost IDs 60000-60063 only.")
+                tr("Quantity is editable for Boost IDs 60000-60063 only."))
         else:
             self.quantity_button.setToolTip("")
 
@@ -293,8 +301,8 @@ class ItemsTab(QWidget):
             command = {"cmd": "add_item", "item_id": item_id,
                        "quantity": quantity}
             self.process.write_command(command)
-            self.status_label.setText(
-                f"Sent live add of item {item_id} (experimental).")
+            self.status_label.setText(tr(
+                "Sent live add of item {item} (experimental).", item=item_id))
             return
         try:
             self._owned = list(save_editor.add_owned_item(
@@ -303,34 +311,36 @@ class ItemsTab(QWidget):
                 self._quantities = save_editor.set_item_quantity(
                     self._quantities, self._owned, item_id, quantity)
         except save_editor.SaveEditorError as error:
-            QMessageBox.warning(self, "Item not added", str(error))
+            QMessageBox.warning(self, tr("Item not added"), str(error))
             return
         self._rebuild_tree()
-        self.status_label.setText(
-            f"Added item {item_id}. Press Save to write it to the save files.")
+        self.status_label.setText(tr(
+            "Added item {item}. Press Save to write it to the save files.",
+            item=item_id))
 
     def _remove(self) -> None:
         item_id = self._selected_item_id()
         if item_id is None:
             QMessageBox.information(
-                self, "No item selected",
-                "Select an item under one of the ranges first.")
+                self, tr("No item selected"),
+                tr("Select an item under one of the ranges first."))
             return
         if self._server_running:
             if save_editor.is_ludus_slot(item_id):
                 QMessageBox.information(
-                    self, "Ludus slot cannot be removed live",
-                    LIVE_SLOT_BLOCKED_TEXT)
+                    self, tr("Ludus slot cannot be removed live"),
+                    tr(LIVE_SLOT_BLOCKED_TEXT))
                 return
             self.process.write_command(
                 {"cmd": "remove_item", "item_id": item_id})
-            self.status_label.setText(
-                f"Sent live removal of item {item_id} (experimental).")
+            self.status_label.setText(tr(
+                "Sent live removal of item {item} (experimental).",
+                item=item_id))
             return
         if save_editor.is_ludus_slot(item_id):
             confirm = QMessageBox.question(
-                self, "Remove a purchased Ludus slot?",
-                OFFLINE_SLOT_WARNING,
+                self, tr("Remove a purchased Ludus slot?"),
+                tr(OFFLINE_SLOT_WARNING),
                 QMessageBox.StandardButton.Yes
                 | QMessageBox.StandardButton.Cancel,
                 QMessageBox.StandardButton.Cancel)
@@ -341,19 +351,19 @@ class ItemsTab(QWidget):
                 self._owned, item_id))
             self._quantities.pop(item_id, None)
         except save_editor.SaveEditorError as error:
-            QMessageBox.warning(self, "Item not removed", str(error))
+            QMessageBox.warning(self, tr("Item not removed"), str(error))
             return
         self._rebuild_tree()
-        self.status_label.setText(
-            f"Removed item {item_id}. Press Save to write it to the save "
-            "files.")
+        self.status_label.setText(tr(
+            "Removed item {item}. Press Save to write it to the save files.",
+            item=item_id))
 
     def _set_quantity(self) -> None:
         item_id = self._selected_item_id()
         if item_id is None or not save_editor.is_boost(item_id):
             QMessageBox.information(
-                self, "Boost quantity only",
-                "Quantity is editable for Boost IDs 60000-60063 only.")
+                self, tr("Boost quantity only"),
+                tr("Quantity is editable for Boost IDs 60000-60063 only."))
             return
         quantity = self.quantity.value()
         if self._server_running:
@@ -362,20 +372,20 @@ class ItemsTab(QWidget):
                 "item_id": item_id,
                 "quantity": quantity,
             })
-            self.status_label.setText(
-                f"Sent live quantity {quantity} for item {item_id} "
-                "(experimental).")
+            self.status_label.setText(tr(
+                "Sent live quantity {quantity} for item {item} "
+                "(experimental).", quantity=quantity, item=item_id))
             return
         try:
             self._quantities = save_editor.set_item_quantity(
                 self._quantities, self._owned, item_id, quantity)
         except save_editor.SaveEditorError as error:
-            QMessageBox.warning(self, "Quantity not set", str(error))
+            QMessageBox.warning(self, tr("Quantity not set"), str(error))
             return
         self._rebuild_tree()
-        self.status_label.setText(
-            f"Set item {item_id} quantity to {quantity}. Press Save to write "
-            "it to the save files.")
+        self.status_label.setText(tr(
+            "Set item {item} quantity to {quantity}. Press Save to write it "
+            "to the save files.", item=item_id, quantity=quantity))
 
     def _save_offline(self) -> None:
         try:
@@ -387,11 +397,13 @@ class ItemsTab(QWidget):
                 server_running=self.process.is_running(),
             )
         except save_editor.SaveEditorError as error:
-            QMessageBox.critical(self, "Save refused", str(error))
+            QMessageBox.critical(self, tr("Save refused"), str(error))
             return
-        lines = [f"Items saved. Pre-edit backup: {result.backup_dir}"]
+        lines = [tr("Items saved. Pre-edit backup: {path}",
+                    path=result.backup_dir)]
         lines.extend(result.warnings)
-        QMessageBox.information(self, "Save complete", "\n\n".join(lines))
+        QMessageBox.information(self, tr("Save complete"),
+                                "\n\n".join(lines))
         self.refresh_offline()
 
     # ------------------------------------------------------------ live data
@@ -399,8 +411,9 @@ class ItemsTab(QWidget):
         if not self._server_running:
             return
         if not reply.get("ok"):
-            self.status_label.setText(
-                f"Error: {reply.get('error', 'unknown error')}")
+            self.status_label.setText(tr(
+                "Error: {error}", error=reply.get("error",
+                                                  tr("unknown error"))))
             return
         if "owned_items" not in reply:
             return
@@ -411,5 +424,6 @@ class ItemsTab(QWidget):
             for item, quantity in quantities.items()
         } if isinstance(quantities, dict) else {}
         self._rebuild_tree()
-        self.status_label.setText(
-            f"Live items from the server: {len(self._owned)} owned item(s).")
+        self.status_label.setText(tr(
+            "Live items from the server: {count} owned item(s).",
+            count=len(self._owned)))

@@ -5,11 +5,16 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+try:
+    from i18n import N_
+except ImportError:  # Imported as tools.server_config by the unit tests.
+    from tools.i18n import N_
+
 
 CONFIG_RELATIVE_PATH = Path("data") / "server-config.json"
 DEFAULT_TITLE_VERSION = "01.00"
 SUPPORTED_TITLE_VERSIONS = ("01.00", "01.06")
-TITLE_VERSION_UNKNOWN_MESSAGE = (
+TITLE_VERSION_UNKNOWN_MESSAGE = N_(
     "The game version is not set and your saves do not show which one you "
     "have. Run Patch setup in SpartacusLegendsServerGUI.exe, or "
     "SpartacusLegendsPatchInstaller.exe, or start the server with "

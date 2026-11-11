@@ -21,8 +21,10 @@ except ImportError:  # Standalone HTTP-only launch has no native size table.
 
 try:
     import user_events
+    from i18n import N_, tr
 except ImportError:  # Imported as tools.* by the unit tests.
     from tools import user_events
+    from tools.i18n import N_, tr
 
 
 SPARTACUS_ONLINE_CONFIG_ID = "423eddd2469548bcb7e78d2d45606d5d"
@@ -41,10 +43,11 @@ DEFAULT_USER_CONTENT_DIR = Path(os.environ.get(
 # The log file always receives the detail line.
 CONSOLE_DETAIL = os.environ.get("SPARTACUS_CONSOLE_DETAIL", "1") not in ("", "0")
 
+# English names (also used in the logs); translated in user events only.
 NATIVE_OBJECT_NAMES = {
-    0x80000001: "profile",
-    0x80000002: "campaign",
-    0x80000003: "roster",
+    0x80000001: N_("profile"),
+    0x80000002: N_("campaign"),
+    0x80000003: N_("roster"),
 }
 
 
@@ -138,22 +141,24 @@ def make_handler(rdv_host: str, rdv_port: int, service_log: ServiceLog,
             if key in refusals_reported:
                 return
             refusals_reported.add(key)
-        name = NATIVE_OBJECT_NAMES.get(type_id, f"object 0x{type_id:08x}")
+        name = tr(NATIVE_OBJECT_NAMES.get(type_id, f"object 0x{type_id:08x}"))
         if decision.writer_build:
             server_build = getattr(upload_gate, "title_version", None)
-            server_text = getattr(server_build, "value", "another version")
+            server_text = getattr(server_build, "value", None) \
+                or tr("another version")
             user_events.emit(
                 "error",
-                f"Progress NOT saved ({name}): the game is version "
-                f"{decision.writer_build} but the server is set to "
-                f"{server_text}. Close RPCS3, stop the server, and run Patch "
-                f"setup again (or start the server with --title-version "
-                f"{decision.writer_build}).",
+                tr("Progress NOT saved ({name}): the game is version "
+                   "{game} but the server is set to {server}. Close RPCS3, "
+                   "stop the server, and run Patch setup again (or start the "
+                   "server with --title-version {game}).",
+                   name=name, game=decision.writer_build, server=server_text),
                 type_id=type_id, writer_build=decision.writer_build)
         elif not decision.retryable:
             user_events.emit(
                 "error",
-                f"Progress NOT saved ({name}): {decision.reason}.",
+                tr("Progress NOT saved ({name}): {reason}.", name=name,
+                   reason=decision.reason),
                 type_id=type_id)
 
     class OnlineConfigHandler(BaseHTTPRequestHandler):
@@ -234,7 +239,8 @@ def make_handler(rdv_host: str, rdv_port: int, service_log: ServiceLog,
                     object_name = native_object_name(type_id, len(body))
                     if object_name is not None:
                         user_events.emit(
-                            "save_uploaded", f"Progress saved ({object_name})")
+                            "save_uploaded", tr("Progress saved ({name})",
+                                                name=tr(object_name)))
                     self._send_body(200, b"")
                     return
                 if self.command in ("GET", "HEAD"):
@@ -251,7 +257,8 @@ def make_handler(rdv_host: str, rdv_port: int, service_log: ServiceLog,
                     object_name = native_object_name(type_id, len(body))
                     if object_name is not None:
                         user_events.emit(
-                            "save_restored", f"Save restored ({object_name})")
+                            "save_restored", tr("Save restored ({name})",
+                                                name=tr(object_name)))
                     self._send_body(200, body)
                     return
                 self._send_body(405, b"")
