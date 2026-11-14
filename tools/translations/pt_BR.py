@@ -475,4 +475,14 @@ MESSAGES = {
     "{program} is the console version, for advanced and scripted use.\nThe app in this folder runs the same server, and it also sets up RPCS3,\nkeeps the game version right, shows when your progress is saved,\nand edits gold, fame and items.":
         "{program} é a versão de console, para uso avançado e com scripts.\nO aplicativo nesta pasta roda o mesmo servidor e também configura o RPCS3,\nmantém a versão do jogo correta, mostra quando seu progresso é salvo\ne edita ouro, fama e itens.",
     "{size:,} bytes": "{size:,} bytes",
+    "Purchase refused: the server's gold or silver does not cover {what}. Nothing was charged.":
+        'Compra recusada: o ouro ou a prata do servidor não cobrem {what}. Nada foi cobrado.',
+    'a recruit refresh':
+        'a renovação dos recrutas',
+    'item {item}':
+        'o item {item}',
+    'gladiator {gladiator}':
+        'o gladiador {gladiator}',
+    'title {title}':
+        'o título {title}',
 }

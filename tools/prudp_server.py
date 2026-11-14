@@ -266,6 +266,13 @@ P102_METHOD_SHAPES = {
     # capture them live before implementing.
 }
 STORE_REFRESH_SENTINEL = 99999
+# Shop error the client itself names: its purchase jobs map 0x80660000..5 to
+# Unknown, InvalidItemID, AttemptToPurchaseWithMoreThanOneCurrency,
+# ExpectedPriceIsLessThanActualPrice, NotEnoughCurrency and
+# PurchasingWithThatCurrencyIsNotAllowed (01.06 job 0x0004CDB4 and its log
+# strings at 0x0083CC90). PurchaseItem, PurchaseCharacter, PurchaseTitle,
+# ConsumeTitle and ReviveCharacter all log "failed with NotEnoughCurrency".
+SHOP_ERROR_NOT_ENOUGH_CURRENCY = 0x80660004
 SLOT_ENTITLEMENT_MIN = 80002
 SLOT_ENTITLEMENT_MAX = 80007
 CONSUMABLE_ITEM_ID_MIN = 60000
@@ -300,6 +307,16 @@ PROTO_NAMES = {0x0A: "TicketGranting", 0x0B: "SecureConnection",
                109: "Challenge", 110: "CommunityBossFight"}
 
 
+class NotEnoughCurrency(Exception):
+    """A Shop debit the server balance cannot cover; nothing was changed."""
+
+    def __init__(self, gold, silver, gold_cost, silver_cost):
+        super().__init__(f"need gold={gold_cost} silver={silver_cost}, "
+                         f"have gold={gold} silver={silver}")
+        self.gold = gold
+        self.silver = silver
+
+
 class EconomyStore:
     """Small atomic JSON store for the title's server-side economy."""
 
@@ -322,6 +339,10 @@ class EconomyStore:
                 "rewards": [],
                 "schedule": [],
             },
+            # 01.06 gladiator titles, Shop key -> title item (1200xx). The
+            # native roster does not keep them: Shop method 24 hands each
+            # gladiator's title back at every login.
+            "gladiator_titles": {},
         }
         self._load()
 
@@ -424,6 +445,19 @@ class EconomyStore:
                 "rewards": login_rewards,
                 "schedule": login_schedule,
             }
+            titles = loaded.get("gladiator_titles", {})
+            if not isinstance(titles, dict):
+                titles = {}
+            kept = {}
+            for gladiator_id, title_id in titles.items():
+                try:
+                    gladiator_id = int(gladiator_id)
+                    title_id = int(title_id)
+                except (TypeError, ValueError):
+                    continue
+                if gladiator_id > 0 and is_gladiator_title(title_id):
+                    kept[str(gladiator_id)] = title_id
+            self.data["gladiator_titles"] = kept
         except FileNotFoundError:
             pass
         except (OSError, ValueError, TypeError, json.JSONDecodeError) as error:
@@ -452,6 +486,29 @@ class EconomyStore:
                     raise
                 time.sleep(0.05)
 
+    def _require(self, gold_cost, silver_cost):
+        """Raise NotEnoughCurrency unless both costs are covered (-1 = none).
+
+        Retail refused these purchases; flooring the balance at zero instead
+        granted the item for free and showed up as gold "resetting" at the
+        next fight (user report, 2026-11-13).
+        """
+        gold, silver = self.data["gold"], self.data["silver"]
+        if (gold_cost > 0 and gold < gold_cost) \
+                or (silver_cost > 0 and silver < silver_cost):
+            raise NotEnoughCurrency(gold, silver, gold_cost, silver_cost)
+
+    def spend(self, gold_cost, silver_cost):
+        """Debit a Shop price (-1 = that currency is not charged)."""
+        with self.lock:
+            self._require(gold_cost, silver_cost)
+            if gold_cost > 0:
+                self.data["gold"] -= gold_cost
+            if silver_cost > 0:
+                self.data["silver"] -= silver_cost
+            self._save()
+            return self.data["gold"], self.data["silver"]
+
     def add_income(self, gold_delta, silver_delta):
         with self.lock:
             self.data["gold"] = max(0, self.data["gold"] + gold_delta)
@@ -477,6 +534,7 @@ class EconomyStore:
             owned = set(self.data["owned_items"])
             consumable_uses = CONSUMABLE_STACK_USES.get(item_id)
             if item_id not in owned or consumable_uses is not None:
+                self._require(gold_cost, silver_cost)
                 if gold_cost >= 0:
                     self.data["gold"] = max(0, self.data["gold"] - gold_cost)
                 if silver_cost >= 0:
@@ -492,9 +550,34 @@ class EconomyStore:
                 self._save()
             return self.data["gold"], self.data["silver"]
 
+    def buy_gladiator_title(self, gladiator_id, title_id, gold_cost,
+                            silver_cost):
+        """Debit a title (Shop method 21) and remember it for the gladiator.
+
+        Titles are bought per gladiator, so the same title item is charged
+        again for each one; it is not an inventory item.
+        """
+        with self.lock:
+            self._require(gold_cost, silver_cost)
+            if gold_cost >= 0:
+                self.data["gold"] = max(0, self.data["gold"] - gold_cost)
+            if silver_cost >= 0:
+                self.data["silver"] = max(0, self.data["silver"] - silver_cost)
+            if gladiator_id > 0 and is_gladiator_title(title_id):
+                self.data["gladiator_titles"][str(gladiator_id)] = title_id
+            self._save()
+            return self.data["gold"], self.data["silver"]
+
+    def gladiator_titles(self):
+        """Return Shop key -> title item for every titled gladiator."""
+        with self.lock:
+            return {int(gladiator_id): title_id for gladiator_id, title_id
+                    in self.data["gladiator_titles"].items()}
+
     def refresh_store(self, gold_cost, silver_cost):
         """Debit a recruit-pool refresh without creating an owned item."""
         with self.lock:
+            self._require(gold_cost, silver_cost)
             if gold_cost >= 0:
                 self.data["gold"] = max(0, self.data["gold"] - gold_cost)
             if silver_cost >= 0:
@@ -691,7 +774,21 @@ class EconomyStore:
             return list(state["claimed"])
 
     def register_daily_login(self, login_date=None):
-        """Add at most one retail daily-login stage for a UTC date."""
+        """Add at most one retail daily-login stage for a UTC date.
+
+        Returns whether the client should open the reward screen today. With
+        all seven stages already stashed no stage is added, but the screen is
+        still offered once per UTC day: the client only sends ClaimLoginRewards
+        (method 4) from that screen, so answering False here left a full stash
+        unclaimable forever (user report, 2026-11-13: 203 method-1 calls and
+        no method 4).
+
+        True is also the client's "first login of the day": the same report
+        shows the daily challenge win counters (challenges 52-54) reset only
+        in sessions that began with True. After the stash filled, every login
+        got False and the three win goals were claimable at zero fights each
+        day.
+        """
         if login_date is None:
             login_date = datetime.datetime.now(datetime.timezone.utc).date()
         login_date_text = login_date.isoformat()
@@ -702,7 +799,11 @@ class EconomyStore:
             rewards = state["rewards"]
             next_stage = len(rewards) + 1
             if next_stage > len(V106_DAILY_LOGIN_REWARDS):
-                return False
+                # Re-offer the full stash (the same screen the client showed
+                # on the day stage 7 was granted) so it can be cashed in.
+                state["last_login_date"] = login_date_text
+                self._save()
+                return True
             if not state["schedule"]:
                 state["schedule"] = self._daily_login_schedule(login_date)
             reward = tuple(state["schedule"][next_stage - 1])
@@ -1238,21 +1339,37 @@ def read_v106_owned_gladiator_records(content_id=1):
     return tuple(records)
 
 
-def encode_shop_records(gladiator_records=()):
+GLADIATOR_TITLE_FIRST = 120000
+GLADIATOR_TITLE_LAST = 129999
+
+
+def is_gladiator_title(item_id):
+    """Whether an item id is a gladiator title (the client's own range)."""
+    return GLADIATOR_TITLE_FIRST <= int(item_id) <= GLADIATOR_TITLE_LAST
+
+
+def encode_shop_records(gladiator_records=(), titles=None):
     """Encode Shop method 24's structured ownership list.
 
     The 01.06 decoder at 0x00043CD0 reads four u32 values, one serialized
     bool, and a final u32 for every record.  The roster validator at
     0x0025C730 matches field 1 against native owned-record +0x08 and copies
-    field 5 to native record +0x13C. The final zero selects the client's
-    explicit default appearance mapping; fields 2-4 are not consumed by the
+    field 5 to native record +0x13C. Fields 2-4 are not consumed by the
     roster-application path.
+
+    The final u32 is the gladiator's title item: 0x0025C624 maps it to the
+    title table by ``item % 10000`` when it lies in 120000..129999 and stores
+    the result at record +0x3C, and uses title 1 (the default) for zero or
+    anything outside that range. The native roster does not keep the title,
+    so sending zero reset every bought title at the next login.
     """
     gladiator_records = tuple(gladiator_records)
+    titles = titles or {}
     return (
         struct.pack("<I", len(gladiator_records))
         + b"".join(
-            struct.pack("<IIIIBI", gladiator_id, 0, 0, 0, active, 0)
+            struct.pack("<IIIIBI", gladiator_id, 0, 0, 0, active,
+                        titles.get(gladiator_id, 0))
             for gladiator_id, active in gladiator_records
         )
     )
@@ -1377,6 +1494,18 @@ def log(msg):
 def encode_balance_pair(gold, silver):
     """Absolute gold/silver pair sent by m6, m11 and the m13 balance shape."""
     return struct.pack("<II", gold, silver)
+
+
+def refuse_shop_debit(what, error):
+    """Log and report a refused Shop debit; return the RMC error to send."""
+    log(f"   *** REFUSED {what}: not enough currency ({error}); nothing "
+        f"granted or debited -> error 0x{SHOP_ERROR_NOT_ENOUGH_CURRENCY:08X} "
+        f"(NotEnoughCurrency) ***")
+    user_events.emit(
+        "warning",
+        tr("Purchase refused: the server's gold or silver does not cover "
+           "{what}. Nothing was charged.", what=what))
+    return SHOP_ERROR_NOT_ENOUGH_CURRENCY
 
 
 def emit_balance_synced(gold, silver=None, fame=None):
@@ -2466,40 +2595,56 @@ def main(port=None, stop_event=None, ready_event=None, host="0.0.0.0"):
                             # refresh.  It is not a purchasable inventory item.
                             # The refresh remains absent from method-3 inventory;
                             # its method-7 receipt only acknowledges the command.
-                            gold, silver = ECONOMY.refresh_store(
-                                gold_cost, silver_cost
-                            )
-                            resp_body = encode_purchase_result(
-                                gold, silver, STORE_REFRESH_SENTINEL,
-                                transaction_time=encode_qdatetime(),
-                                quantity=1,
-                            )
-                            label = "MONETIZATION_STORE_REFRESH"
-                            log(f"   *** Recruit pool refresh gold_cost={gold_cost} "
-                                f"silver_cost={silver_cost} -> balances "
-                                f"gold={gold} silver={silver} ***")
-                            emit_balance_synced(gold, silver)
+                            try:
+                                gold, silver = ECONOMY.refresh_store(
+                                    gold_cost, silver_cost
+                                )
+                            except NotEnoughCurrency as error:
+                                resp_error = refuse_shop_debit(
+                                    tr("a recruit refresh"), error)
+                                resp_body = b""
+                                label = "MONETIZATION_STORE_REFRESH_REFUSED"
+                            else:
+                                resp_body = encode_purchase_result(
+                                    gold, silver, STORE_REFRESH_SENTINEL,
+                                    transaction_time=encode_qdatetime(),
+                                    quantity=1,
+                                )
+                                label = "MONETIZATION_STORE_REFRESH"
+                                log(f"   *** Recruit pool refresh "
+                                    f"gold_cost={gold_cost} "
+                                    f"silver_cost={silver_cost} -> balances "
+                                    f"gold={gold} silver={silver} ***")
+                                emit_balance_synced(gold, silver)
                         else:
-                            gold, silver = ECONOMY.purchase(
-                                item_id, gold_cost, silver_cost
-                            )
-                            # The final three fields form the purchased-item
-                            # receipt: item id, an eight-byte transaction/time
-                            # value, and the resulting quantity.
-                            resp_body = encode_purchase_result(
-                                gold, silver, item_id,
-                                transaction_time=encode_qdatetime(),
-                                quantity=1,
-                            )
-                            label = "MONETIZATION_PURCHASE"
-                            log(f"   *** Purchase item={item_id} "
-                                f"gold_cost={gold_cost} "
-                                f"silver_cost={silver_cost} -> balances "
-                                f"gold={gold} silver={silver} ***")
-                            user_events.emit(
-                                "purchase", tr("Shop purchase: item {item}",
-                                               item=item_id))
-                            emit_balance_synced(gold, silver)
+                            try:
+                                gold, silver = ECONOMY.purchase(
+                                    item_id, gold_cost, silver_cost
+                                )
+                            except NotEnoughCurrency as error:
+                                resp_error = refuse_shop_debit(
+                                    tr("item {item}", item=item_id), error)
+                                resp_body = b""
+                                label = "MONETIZATION_PURCHASE_REFUSED"
+                            else:
+                                # The final three fields form the purchased-
+                                # item receipt: item id, an eight-byte
+                                # transaction/time value, and the quantity.
+                                resp_body = encode_purchase_result(
+                                    gold, silver, item_id,
+                                    transaction_time=encode_qdatetime(),
+                                    quantity=1,
+                                )
+                                label = "MONETIZATION_PURCHASE"
+                                log(f"   *** Purchase item={item_id} "
+                                    f"gold_cost={gold_cost} "
+                                    f"silver_cost={silver_cost} -> balances "
+                                    f"gold={gold} silver={silver} ***")
+                                user_events.emit(
+                                    "purchase",
+                                    tr("Shop purchase: item {item}",
+                                       item=item_id))
+                                emit_balance_synced(gold, silver)
                     elif rmc["method_id"] == 8:     # Enumerate transactions/server time
                         transactions = ECONOMY.method_8_transactions()
                         resp_body = encode_monetization_server_time(
@@ -2595,12 +2740,18 @@ def main(port=None, stop_event=None, ready_event=None, host="0.0.0.0"):
                         except struct.error:
                             gladiator_id, unk, category = 0, 0, None
                             gold_cost = silver_cost = -1
-                        # Debit via add_income (negative delta) so the gladiator
-                        # id does NOT pollute the item inventory (owned_items),
-                        # unlike purchase(); -1 costs are skipped.
-                        gold_delta = -gold_cost if gold_cost >= 0 else 0
-                        silver_delta = -silver_cost if silver_cost >= 0 else 0
-                        gold, silver = ECONOMY.add_income(gold_delta, silver_delta)
+                        # Debit via spend() so the gladiator id does NOT
+                        # pollute the item inventory (owned_items), unlike
+                        # purchase(); -1 costs are skipped. An unaffordable
+                        # recruit is refused with NotEnoughCurrency, which
+                        # the client's PurchaseCharacter job recognises.
+                        try:
+                            gold, silver = ECONOMY.spend(gold_cost, silver_cost)
+                        except NotEnoughCurrency as error:
+                            gold = silver = None
+                            resp_error = refuse_shop_debit(
+                                tr("gladiator {gladiator}",
+                                   gladiator=gladiator_id), error)
                         # Best-supported response shape: mirror the proven m7
                         # receipt (balances + id/txn/quantity). The recruited
                         # gladiator's full data is already client-side (the store
@@ -2608,7 +2759,10 @@ def main(port=None, stop_event=None, ready_event=None, host="0.0.0.0"):
                         # it into the owned roster. Overridable for iteration via
                         # P102M13_SHAPE if this proves wrong.
                         shape = os.environ.get("P102M13_SHAPE", "m7")
-                        if shape == "balances":
+                        if resp_error is not None:
+                            resp_body = b""
+                            shape = "refused"
+                        elif shape == "balances":
                             resp_body = struct.pack("<II", gold, silver)
                         elif shape == "empty":
                             resp_body = b""
@@ -2623,7 +2777,7 @@ def main(port=None, stop_event=None, ready_event=None, host="0.0.0.0"):
                             f"category={category} "
                             f"gold_cost={gold_cost} silver_cost={silver_cost} "
                             f"shape={shape} -> balances gold={gold} silver={silver} ***")
-                        if shape != "empty":
+                        if shape not in ("empty", "refused"):
                             emit_balance_synced(gold, silver)
                     elif rmc["method_id"] == 15:    # Replace gladiator perk
                         # Live-traced (2026-08-12): the Ludus perk swap sends
@@ -2698,10 +2852,48 @@ def main(port=None, stop_event=None, ready_event=None, host="0.0.0.0"):
                             "SPARTACUS_USER_CONTENT_ID", "1"
                         ), 0)
                         shop_records = read_v106_owned_gladiator_records(content_id)
-                        resp_body = encode_shop_records(shop_records)
+                        titles = ECONOMY.gladiator_titles()
+                        resp_body = encode_shop_records(shop_records, titles)
                         label = "MONETIZATION_SHOP_RECORDS"
                         log("   *** Shop records -> owned gladiators "
-                            f"{list(shop_records)} ***")
+                            f"{list(shop_records)} titles={titles} ***")
+                    elif rmc["method_id"] == 21:    # Buy gladiator title (01.06)
+                        # Live user report (2026-11-13): params are
+                        #   u32 gladiator_id, u32 title item (1200xx),
+                        #   i32 gold_cost, i32 silver_cost   (-1 = not charged)
+                        # e.g. {1096, 120043, -1, 2500}. Parser case
+                        # 0x0004376C is shared with method 7, so the response
+                        # is the purchase result: gold, silver, then the
+                        # receipt {item, txn time, quantity}. The title is
+                        # replayed by method 24's final field at login.
+                        try:
+                            gladiator_id, title_id, gold_cost, silver_cost = \
+                                struct.unpack_from("<IIii", rmc["params"], 0)
+                        except struct.error:
+                            gladiator_id, title_id = 0, 0
+                            gold_cost = silver_cost = -1
+                        try:
+                            gold, silver = ECONOMY.buy_gladiator_title(
+                                gladiator_id, title_id, gold_cost, silver_cost
+                            )
+                        except NotEnoughCurrency as error:
+                            resp_error = refuse_shop_debit(
+                                tr("title {title}", title=title_id), error)
+                            resp_body = b""
+                            label = "MONETIZATION_GLADIATOR_TITLE_REFUSED"
+                        else:
+                            resp_body = encode_purchase_result(
+                                gold, silver, title_id,
+                                transaction_time=encode_qdatetime(),
+                                quantity=1,
+                            )
+                            label = "MONETIZATION_GLADIATOR_TITLE"
+                            log(f"   *** Gladiator title "
+                                f"gladiator={gladiator_id} title={title_id} "
+                                f"gold_cost={gold_cost} "
+                                f"silver_cost={silver_cost} -> balances "
+                                f"gold={gold} silver={silver} ***")
+                            emit_balance_synced(gold, silver)
                     else:
                         # UNHANDLED shop method.  Protocol 102 is the one
                         # protocol excluded from the GENERIC_ACK fallback below,

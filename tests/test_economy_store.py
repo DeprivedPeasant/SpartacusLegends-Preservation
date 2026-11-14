@@ -7,6 +7,7 @@ from pathlib import Path
 
 from tools.prudp_server import (
     EconomyStore,
+    NotEnoughCurrency,
     STORE_REFRESH_SENTINEL,
     V106_CHALLENGE_REWARDS,
     V106_DAILY_CHALLENGE_IDS,
@@ -223,13 +224,94 @@ class EconomyStoreTests(unittest.TestCase):
             self.assertTrue(store.register_daily_login(
                 start + datetime.timedelta(days=offset)
             ))
-        self.assertFalse(store.register_daily_login(
-            start + datetime.timedelta(days=7)
-        ))
+        # A full stash is offered again once per new day (so it can still be
+        # cashed in) but never grows past stage 7.
+        day8 = start + datetime.timedelta(days=7)
+        self.assertTrue(store.register_daily_login(day8))
+        self.assertFalse(store.register_daily_login(day8))
+        self.assertTrue(store.register_daily_login(
+            day8 + datetime.timedelta(days=1)))
         self.assertEqual(
             [reward[0] for reward in store.daily_login_rewards()],
             list(range(1, 8)),
         )
+        _schedule, current_stage, _ = store.daily_login_info()
+        self.assertEqual(current_stage, 6)
+
+    def test_unaffordable_purchase_is_refused_without_granting(self):
+        # User report: item 80005 for 17 gold with 12 gold was granted and
+        # the balance floored to 0.
+        store, path = self.make_store({"gold": 12, "silver": 23288})
+        with self.assertRaises(NotEnoughCurrency):
+            store.purchase(80005, 17, -1)
+        reloaded = EconomyStore(path)
+        self.assertEqual((reloaded.data["gold"], reloaded.data["silver"]),
+                         (12, 23288))
+        self.assertNotIn(80005, reloaded.data["owned_items"])
+        # Exactly enough is fine, and -1 means "not this currency".
+        self.assertEqual(store.purchase(80005, 12, -1), (0, 23288))
+
+    def test_silver_shortfall_is_refused_too(self):
+        store, _ = self.make_store({"gold": 100, "silver": 999})
+        with self.assertRaises(NotEnoughCurrency):
+            store.purchase(40036, -1, 1000)
+        with self.assertRaises(NotEnoughCurrency):
+            store.refresh_store(-1, 1000)
+        with self.assertRaises(NotEnoughCurrency):
+            store.spend(-1, 1000)
+        with self.assertRaises(NotEnoughCurrency):
+            store.buy_gladiator_title(1096, 120043, -1, 2500)
+        self.assertEqual((store.data["gold"], store.data["silver"]), (100, 999))
+        self.assertEqual(store.gladiator_titles(), {})
+
+    def test_spend_debits_only_the_charged_currency(self):
+        store, _ = self.make_store({"gold": 5, "silver": 420})
+        self.assertEqual(store.spend(-1, 420), (5, 0))
+        self.assertEqual(store.spend(5, -1), (0, 0))
+        self.assertEqual(store.spend(0, -1), (0, 0))
+
+    def test_rebuying_an_owned_item_is_not_charged_or_refused(self):
+        store, _ = self.make_store({"gold": 0, "silver": 0,
+                                    "owned_items": [10195]})
+        self.assertEqual(store.purchase(10195, -1, 28520), (0, 0))
+
+    def test_gladiator_titles_are_charged_per_gladiator_and_persist(self):
+        store, path = self.make_store({"gold": 5, "silver": 6000})
+        # Live captures: {gladiator, title, gold -1, silver cost}.
+        self.assertEqual(
+            store.buy_gladiator_title(1096, 120043, -1, 2500), (5, 3500))
+        self.assertEqual(
+            store.buy_gladiator_title(1023, 120043, -1, 2500), (5, 1000))
+        self.assertEqual(
+            store.buy_gladiator_title(1096, 120039, -1, 1000), (5, 0))
+        reloaded = EconomyStore(path)
+        self.assertEqual(reloaded.gladiator_titles(),
+                         {1096: 120039, 1023: 120043})
+        # Titles are not inventory items.
+        self.assertNotIn(120043, reloaded.data["owned_items"])
+
+    def test_invalid_stored_titles_are_dropped_on_load(self):
+        store, path = self.make_store({"gladiator_titles": {
+            "1096": 120043, "1023": 60006, "x": 120001, "0": 120001,
+            "1045": "bad"}})
+        self.assertEqual(store.gladiator_titles(), {1096: 120043})
+
+    def test_stuck_full_stash_from_an_old_day_is_offered_and_claimable(self):
+        # The reported profile: seven stages stashed, last login weeks ago.
+        store, path = self.make_store({})
+        start = datetime.date(2026, 10, 18)
+        for offset in range(7):
+            store.register_daily_login(start + datetime.timedelta(days=offset))
+        reloaded = EconomyStore(path)
+        self.assertTrue(reloaded.register_daily_login(
+            datetime.date(2026, 11, 13)))
+        self.assertEqual(len(reloaded.claim_daily_login_rewards()), 7)
+        self.assertEqual(reloaded.daily_login_rewards(), [])
+        # The next day starts a new cycle at stage 1.
+        self.assertTrue(reloaded.register_daily_login(
+            datetime.date(2026, 11, 14)))
+        self.assertEqual(
+            [reward[0] for reward in reloaded.daily_login_rewards()], [1])
 
     def test_claim_daily_login_rewards_credits_and_clears_atomically(self):
         store, path = self.make_store({

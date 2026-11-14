@@ -629,6 +629,29 @@ class MonetizationResponseTests(unittest.TestCase):
             (1007, 0, 0, 0, 0, 0),
         )
 
+    def test_shop_method_24_carries_each_gladiators_title(self):
+        # 0x0025C624 maps the final u32 to the gladiator's title; zero means
+        # the default title, which is what reset bought titles at login.
+        body = p.encode_shop_records([(1096, 1), (1115, 1)],
+                                     {1096: 120043})
+
+        self.assertEqual(
+            struct.unpack_from("<IIIIBI", body, 4),
+            (1096, 0, 0, 0, 1, 120043),
+        )
+        self.assertEqual(
+            struct.unpack_from("<IIIIBI", body, 25),
+            (1115, 0, 0, 0, 1, 0),
+        )
+
+    def test_title_range_matches_the_client_check(self):
+        self.assertTrue(p.is_gladiator_title(120000))
+        self.assertTrue(p.is_gladiator_title(120043))
+        self.assertTrue(p.is_gladiator_title(129999))
+        self.assertFalse(p.is_gladiator_title(119999))
+        self.assertFalse(p.is_gladiator_title(130000))
+        self.assertFalse(p.is_gladiator_title(0))
+
     def test_recruit_request_layouts_match_live_title_captures(self):
         v100 = bytes.fromhex(
             "ee030000 00000000 ffffffff a4010000"
