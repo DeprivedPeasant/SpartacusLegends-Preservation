@@ -1,4 +1,43 @@
-# Current AI handoff — v0.7.3 release checkpoint
+# Current AI handoff — v0.7.4 release checkpoint
+
+## v0.7.4 release (2026-11-14)
+
+Four 01.06 economy fixes from a user report (`LucasDrago`, title 01.06).
+Released as GitHub release `v0.7.4` from `main` (tag `v0.7.4`); the code is
+commit `7a040a6`. Full evidence, static addresses and live results are in
+`notes/10-known-issues.md` (local, ignored).
+
+| Artifact | SHA-256 |
+| --- | --- |
+| `SpartacusLegends-Preservation-v0.7.4.zip` (64,763,308 bytes) | `7FC66E5FE153672244597AFE95CEA7BA22E95836DD85B3282C7A4194CBCA22BB` |
+| `SpartacusLegendsServerGUI.exe` | `813AAD783173BED5DE333CD2DEFA9E45CDE44528519A1CE0444731F081B5F5CB` |
+| `SpartacusLegendsServer.exe` | `C8C8358D24F7F3F19BBD423EB0C35EDFF45FE4B5E4031C6770D293A103AA0FD0` |
+| `SpartacusLegendsPatchInstaller.exe` | `00E0341ADCC9E73A7C9D36E2C09A302348D342A3EF6DD758F6A018B94950C7D2` |
+
+- **Daily Login stuck at stage 7.** `register_daily_login()` answered False
+  forever once the stash was full, and the client sends ClaimLoginRewards
+  (m4) only from the reward screen. A full stash is now offered again
+  (`granted=True`, no new stage) once per UTC day.
+- **Daily challenges 52-54 claimable at zero fights.** Same cause: the client
+  resets its daily win counters only when LoginReward m1 answers True. Fixed
+  by the above. Gap: with `--no-daily-login-rewards` m1 is always False, so
+  those players' daily counters never reset.
+- **Purchases granted without enough currency.** The 01.06 purchase job
+  `0x0004CDB4` maps Shop errors `0x80660000..5`; `0x80660004` is
+  NotEnoughCurrency. m7 (items and the 99999 refresh), m13 and m21 now raise
+  `NotEnoughCurrency` in `EconomyStore` and answer that RMC error; nothing is
+  granted or debited. m11/m15/m16 are unchanged.
+- **Titles reset to the default.** Shop m21 (PurchaseTitle; response shape
+  shared with m7 at parser case `0x0004376C`) is handled, and titles are
+  stored per gladiator in `gladiator_titles`. Method 24's final u32 is the
+  title (`0x0025C624` maps 120000..129999, else default title 1); it was
+  always 0. The native roster does not store titles.
+- Live-tested on a copy of the reporter's data: Daily Login cash-in, the
+  refusal (the game silently does nothing), and title persistence across a
+  restart all passed. The daily-challenge reset on the next UTC day is not
+  yet confirmed. Changing a title charges again each time; the client sends
+  the price, so that is the game's own behaviour. `CallConsumeTitle` is
+  unmapped and never seen in a log.
 
 ## v0.7.3 release (2026-11-11)
 
