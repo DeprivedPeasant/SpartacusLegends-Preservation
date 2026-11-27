@@ -1,611 +1,187 @@
-# Spartacus Legends preservation server
-
-Join the discord to keep up to date, ask for help and submit bug reports!
-https://discord.gg/TgJ6n9qDHG
-
-This project restores the login/bootstrap path for the PS3 version of
-Spartacus Legends using a local OnlineConfig and Quazal RendezVous server.
-Once bootstrap completes, the preserved single-player game runs locally. The
-server reimplements the retired economy, inventory, and native UserStorage
-calls. At login, the game automatically enumerates and restores its server-side
-profile, campaign, and complete gladiator-roster objects. The compatibility
-patch also completes the post-fight gladiator-recruitment store refresh, which
-otherwise retries indefinitely.
-
-> [!TIP]
-> **Optional 60 FPS mode:** Spartacus Legends runs correctly at 60 FPS in
-> RPCS3 without modifying the game executable. Open the game's custom
-> configuration, set **Advanced > VBlank Frequency** to **120 Hz**, and leave
-> **GPU > Frame limit** on **Auto**. Menus, gameplay timers, cutscenes, input,
-> and physics have been verified at normal speed. This is optional; leave
-> VBlank Frequency at 60 Hz for the original 30 FPS presentation if your system
-> cannot maintain 60 FPS.
-
-Shop actions the retired service no longer answers, such as replacing a
-gladiator's perk or buying Ludus execution boosts, previously left the game
-waiting forever on a loading spinner. The server now answers every shop request,
-so an unimplemented feature reports a failure instead of locking the game up.
-
-Tested configuration:
-
-- Game: Spartacus Legends, NPUB30746 version 01.00 or 01.06. Both have passed
-  live login and native profile/campaign/roster persistence tests; the wider
-  01.06 single-player pass also covers recruitment, fights, level-up rewards,
-  Daily Goals, and initial Nemesis progression.
-- RPCS3 PPU hash 01.00: `81471d050c14f4d20b4027686f8b571dafd32394`
-- RPCS3 PPU hash 01.06: `131aece6ae8526d13307be925f48c87f73c43799`
-- RPCS3 PPU decoder: Recompiler (LLVM)
-- Original presentation: 30 FPS at the default 60 Hz VBlank frequency
-- Optional presentation: verified 60 FPS at 120 Hz VBlank with frame limit Auto
-
-No game files or decrypted executable content are included.
-
-## Before you start
-
-You need all four of these. The setup cannot work without them:
-
-1. **The USA release of Spartacus Legends (`NPUB30746`), version 01.00 or
-   01.06**, installed in RPCS3. Other regions are not supported, and each
-   patch section matches one exact executable, so any other build silently
-   goes unpatched. Check the **Version** column in RPCS3's game list — it must
-  read `01.00` or `01.06`. If it reads anything else, the game's update data
-  has to be removed. 01.00 is the build the release regression was run on;
-  01.06 support is newer, but its core single-player and persistence paths
-  have been live-tested.
-2. **An RPCN account**, created and signed in through RPCS3 under
-   **Manage > RPCN > RPCN Account**.
-3. **RPCS3 closed** while you run Patch setup. RPCS3 rewrites its own
-   configuration files when it exits, which would undo the setup.
-4. **The release ZIP extracted to a real folder**, for example
-   `C:\Games\SpartacusLegends-Preservation`. Do not run the programs from
-   inside the ZIP: Windows unpacks them to a temporary folder and later deletes
-   it, taking your saved profile, roster and campaign progress with it.
-
-The programs are unsigned, so Windows SmartScreen shows
-**"Windows protected your PC"** the first time you run each one. Choose
-**More info > Run anyway**. Some antivirus tools also flag them, which is a
-known false positive for this kind of packaged Python program. Each release
-publishes the ZIP's SHA-256 in its release notes if you want to check the
-download first.
-
-## Setup
-
-Use the app, `SpartacusLegendsServerGUI.exe`. It does everything the two
-console programs do, and it also keeps the game version right, shows when your
-progress is saved, and edits gold, fame and items. Keep it together with its
-`SpartacusLegendsServerGUI_runtime` folder; nothing is unpacked to `%TEMP%`.
-
-The app is available in **English, Spanish and Brazilian Portuguese**. It
-follows your Windows language the first time; change it with the language menu
-at the bottom left (the app restarts to apply it).
-
-**1. Close RPCS3.**
-
-**2. Open `SpartacusLegendsServerGUI.exe`.** The first time, it opens on
-**Patch setup**. Choose your RPCS3 folder (the one containing `rpcs3.exe`).
-The game, its version and its executable are found and checked automatically.
-Press **Install / repair setup**; every line of the checklist should then read
-**OK**.
-
-Patch setup merges the supplied patch entries into RPCS3's imported patches,
-applies the NPUB30746 network configuration, enables the required
-compatibility patch, records the game version for the server, and clears the
-game's PPU cache. Existing configuration files are backed up, and unrelated
-settings and optional patch choices are kept. RPCS3 IPC is not required. Run
-it again after installing or removing the 01.06 update.
-
-A **MISSING** line is something the setup could not write; a **WARNING** line
-is something you need to fix yourself, such as an unsupported game version or
-a missing RPCN account. Fix those before continuing; the game cannot reach the
-main menu otherwise.
-
-**3. Go to the Server page and press Start server.** Leave the app open for the
-whole play session. The status reads **Ready** once the server is listening.
-
-**4. Start RPCS3 and cold-boot the game.** Right-click Spartacus Legends and
-choose **Boot with default configuration** or simply start it; do not resume a
-savestate. Log in normally. The game displays **Saving** and continues to the
-main menu, and the app's status changes to **Game connected**. Its Activity
-list says when your progress is restored and saved.
-
-When you finish, return to the Ludus, wait about 20 seconds for the game's
-autosave, close RPCS3, then press **Stop server**.
-
-To confirm the patch actually applied, open RPCS3's log after booting and look
-for the line beginning `PPU executable hash:`. It must read
-`PPU-81471d050c14f4d20b4027686f8b571dafd32394` for version 01.00 or
-`PPU-131aece6ae8526d13307be925f48c87f73c43799` for version 01.06. A different
-hash means the game build is not the supported one and no patch will apply to
-it. The app reads this for you under **Patch setup > Last boot**.
-
-### What else the app does
-
-- **Server page:** shows the session state in words ("Stopped", "Starting",
-  "Ready", "Game connected"), lists plain-language events, and can show or
-  hide the full detail log. Status is always spelled out in text as well as
-  colour. Before it starts, it checks the game version RPCS3 has against the
-  one the server is set to.
-- **Patch setup:** the executable is decrypted from a temporary copy with your
-  RPCS3 and its PPU hash is checked (close RPCS3 first: a second `rpcs3.exe`
-  cannot decrypt while one is open). The page comes back by itself if the game
-  logs in but never starts loading its saves, which means the compatibility
-  patch did not apply.
-- **Player page, server stopped:** edit gold, silver and fame offline. Every
-  save writes a SHA-256-verified backup under `data\backups` first;
-  **Restore backup** rolls it back.
-- **Player page, server running:** gold and silver edits go through the running
-  server and are marked **Pending** until the game adopts them in its next
-  balance-carrying call: in practice after your next fight or shop purchase.
-  The game's own autosave then writes the new values. On 01.00 fame can only
-  be edited offline, with the server stopped.
-- **Player page, 01.06:** 01.06 keeps gold, silver and fame on the server only
-  (they are sent to the game at login and after each fight), so the editor
-  changes `profile-01.06.json` and never the game's own profile. Fame can be
-  edited live on 01.06.
-- **Items page:** owned items, Boost uses and purchased Ludus slots. Live item
-  and Boost-quantity edits are **experimental**: they are expected to appear at
-  the next shop inventory refresh or login, which has not yet been
-  live-validated. Ludus slot entitlements cannot be removed live.
-
-### Console programs (advanced)
-
-`SpartacusLegendsServer.exe` and `SpartacusLegendsPatchInstaller.exe` remain
-for scripted and advanced use, such as the command-line options described
-below. They are English only. Double-clicking either one offers to open the
-app instead: press Enter to open it, or type `C` and Enter to stay in the
-console. Any command-line option, including `--console`, skips that question.
-
-The console installer takes the RPCS3 folder as an argument (or asks for it),
-does the same work as **Install / repair setup**, and prints a checklist in
-which every line must read `[OK]`, ending in:
-
-```
-SETUP OK. Start SpartacusLegendsServer.exe, then cold-boot the game in RPCS3.
-```
-
-`[XX]` is something the installer failed to write; `[!!]` is something you need
-to fix yourself. `--verify` only reads and reports:
-
-```powershell
-SpartacusLegendsPatchInstaller.exe "C:\path\to\RPCS3" --verify
-```
-
-The console server reports the following, and must stay open for the whole
-play session; press Ctrl+C to stop it cleanly:
-
-```
-Port check passed: TCP 80, UDP 21000, UDP 21001
-All services are ready.
-```
-
-Do not run the console server and the app's server at the same time: they use
-the same ports and the same saves.
-
-### Adaptive patching (experimental)
-
-If your game's executable is a different dump (its PPU hash is not one of the
-two supported ones), the distributed patch never applies. Both the GUI's
-**Patch setup** page and `SpartacusLegendsPatchInstaller.exe` detect this
-themselves: they decrypt a temporary copy of `EBOOT.BIN` with your RPCS3, hash
-it, and generate a patch section for that exact dump by locating each patch
-site with masked instruction signatures (the GUI asks first).
-
-- If any site is not found exactly once, the whole set is refused - no address
-  is ever guessed. A JSON report with the resolved addresses is written beside
-  the patch backup for bug reports.
-- If automatic decryption fails, decrypt with RPCS3 **Utilities > Decrypt PS3
-  Binaries** and use the produced `.elf` (GUI option, or `--eboot-elf`).
-- Installer flags: `--no-adaptive` installs only the shipped patch;
-  `--no-hash-check` skips the executable check.
-- Decrypting runs `rpcs3.exe`, which normally rewrites RPCS3's log; the
-  installer puts your previous log back afterwards.
-
-If the GUI or installer says Windows is limiting it (Low integrity level),
-copy the whole release folder somewhere ordinary such as your Desktop and run
-it from there; some sandboxing tools mark the folders they work in that way.
-
-Do not copy another dump's `PPU-...` section: the hash is per executable.
-Adaptive patching has been proven on one real variant dump so far, so it is
-still labelled experimental.
-
-## Manual setup
-
-Use this only if Patch setup cannot find your RPCS3 folder. It performs the
-same four changes by hand.
-
-- Open `SpartacusLegends_ServerPatch.yml` in a text editor and save a copy
-  named exactly `imported_patch.yml` in `<RPCS3 folder>\patches\`. On Windows,
-  choose **All files (\*.\*)** when saving so the editor does not add a `.txt`
-  extension.
-- If `imported_patch.yml` already exists, do not overwrite it. Copy the
-  `PPU-81471d050c14f4d20b4027686f8b571dafd32394` section (01.00) and/or the
-  `PPU-131aece6ae8526d13307be925f48c87f73c43799` section (01.06) from the
-  supplied file into the existing file beneath its single `Version: 1.2`
-  header. Keeping both is harmless: RPCS3 applies only the section whose hash
-  matches the executable it boots.
-- Restart RPCS3, open **Manage > Game Patches**, enable **Spartacus Legends -
-  Server emulator compatibility** for NPUB30746 at your installed version, and
-  click **Save**. The separately listed optional patches can remain disabled
-  unless wanted.
-- Right-click the game, open its custom configuration, and under **Network**
-  set:
-
-  - **Network Status:** Connected
-  - **PSN Status:** RPCN
-  - **IP swap list:** `onlineconfigservice.ubi.com=127.0.0.1`
-
-- Right-click the game and choose **Remove > PPU Cache** once after installing
-  or changing the patch. This prevents RPCS3 from reusing LLVM code compiled
-  from an older patch.
-
-Afterwards, `SpartacusLegendsPatchInstaller.exe "<RPCS3 folder>" --verify`
-still reports whether the result is complete.
-
-This follows the RPCS3 Wiki's
-[Manually adding custom patches](https://wiki.rpcs3.net/index.php?title=Help:Game_Patches#Manually_adding_custom_patches)
-procedure. The filename and location are required: RPCS3 will not recognize a
-custom patch saved under another name or outside its `patches` directory.
-
-## Saves, backups, and upgrading
-
-The authoritative server-side saves are beside `SpartacusLegendsServer.exe`.
-Because 01.00 and 01.06 use incompatible campaign-object layouts, each build
-has its own persistence namespace. The installer writes the active selection
-to `data\server-config.json`; normal server startup reads it automatically.
-
-| Build | Native objects | Economy companion |
-| --- | --- | --- |
-| 01.00 | `data\usercontent\8000000x\1.bin` | `data\profile.json` |
-| 01.06 | `data\usercontent\01.06\8000000x\1.bin` | `data\profile-01.06.json` |
-
-The three native object types are:
-
-| Type | Contents | 01.00 size | 01.06 accepted sizes |
-| --- | --- | ---: | ---: |
-| `80000001` | Profile, currency, fame, and related account values | 4664 | 5560, 5520, or 4664 |
-| `80000002` | Campaign, mission, Primus/Nemesis progress | 6148 | 7172 |
-| `80000003` | Complete gladiator roster, equipment, and roster state | 21444 | 21448 or 21444 |
-
-The server stores uploads atomically and returns these objects during automatic
-save enumeration at the next login. The game also continues to write its normal
-RPCS3 `PRG-DATA` save. To back up or move a profile, close both programs and
-copy the server's entire `data` directory together with RPCS3's saved data. Do
-not copy only one native object: the profile, campaign, roster, economy service,
-and local save advance together.
-
-There is deliberately no automatic conversion between 01.00 and 01.06. When
-you switch builds, rerun the installer and that build resumes its own last
-state. It never overwrites the other build's campaign object. Backing up the
-entire `data` directory preserves both namespaces and the selected-version
-configuration.
-
-An explicit 01.00-to-01.06 migration is available while RPCS3 and the server
-are closed:
-
-```text
-.\SpartacusLegendsServer.exe --migrate-01.00-to-01.06
-```
-
-The command requires all three exact-size 01.00 native objects plus
-`data\profile.json`. It validates their economy balances, creates a timestamped
-copy of the complete `data` directory beneath `backups`, refuses to overwrite
-any existing 01.06 save, copies the compatible profile layout, extends the
-roster with its new zero-initialized trailing word, and extends the campaign
-object with the zero-initialized 01.06-only `0x400`-byte area. It then exits
-without starting the network server. An audit record is written to
-`data\migration-01.00-to-01.06.json`.
-
-If an unwanted fallback 01.06 save was already created, the migration still
-refuses it by default. After confirming that the existing 01.06 state may be
-discarded, use both explicit flags:
-
-```text
-.\SpartacusLegendsServer.exe --migrate-01.00-to-01.06 --replace-existing-01.06
-```
-
-The complete `data` directory—including the replaced 01.06 state—is copied to
-`backups` before anything is replaced. Do not use the replacement flag if the
-existing 01.06 profile contains progress you want to keep.
-
-This conversion was live-validated with a progressed 01.00 profile: all six
-gladiators, equipment, purchased slots, currency/fame, and Primus progress
-loaded; the client rewrote all three objects at native 01.06 sizes; an Ashur
-Nemesis completion and new equipment then survived a full server restart and
-cold boot. Keep the reported backup anyway. On the first 01.06 boot,
-verify roster/equipment and purchased slots, gold/silver/fame, ordinary
-campaign/Primus progress, clean Daily Goals and Nemesis state, then make a new
-change and verify it again after a second cold boot.
-
-The compatibility patch retains the local section-1 profile apply as a safe
-fallback. RPCS3's `PRG-DATA` profile can initialize fame, currency, and related
-values before a native type-1 object exists; when the server has a valid type-1
-object, the game's normal server readback then applies the authoritative copy.
-
-`data\roster.json` and `data\campaign.json` are legacy v0.3.x PINE snapshots.
-The one-time legacy migration path is available only while serving 01.00;
-01.06 never interprets those build-specific captures. `data\profile.json`
-remains the 01.00 economy companion, while 01.06 uses
-`data\profile-01.06.json`. Neither companion replaces the corresponding
-native type-1 object.
-
-### Upgrading from v0.3.x
-
-The server can perform the one-time v0.3-to-native migration while serving
-01.00. Before trying a current release:
-
-1. Close RPCS3 and the old preservation server.
-2. Back up the old server's complete `data` directory and RPCS3's saved data.
-3. Extract v0.4 into a new folder rather than overwriting the working v0.3.x
-   installation.
-4. Copy the old `data` directory into the new folder so `profile.json` and the
-   legacy recovery copies remain available.
-
-On the first 01.00 startup, valid legacy JSON without a native counterpart is
-detected and backed up before the one-time migration begins. Completed native
-objects do not reactivate PINE. Keep the v0.3.x folder and backup until you
-have confirmed profile, campaign, and roster persistence across a cold boot.
-
-If automatic migration needs the legacy roster/campaign restore companion,
-enable RPCS3 IPC on port `28012`. The explicit recovery form is:
-
-```text
-SpartacusLegendsServer.exe --legacy-roster-bridge
-```
-
-This is a temporary compatibility/recovery mode, not normal gameplay. Do not
-delete the legacy JSON until the native cold-boot verification succeeds. It is
-not used for 01.06.
-
-The existing Legend recovery command also operates only on legacy
-`roster.json` plus RPCS3 `PRG-DATA`. To inspect its plan without changing
-anything, close both programs and run:
-
-```text
-SpartacusLegendsServer.exe --recover-legends "C:\path\to\RPCS3"
-```
-
-If the listed names and product IDs are correct, apply it:
-
-```text
-SpartacusLegendsServer.exe --recover-legends "C:\path\to\RPCS3" --apply-recovery
-```
-
-Recovery retains ordinary gladiators, removes each detected Legend from the
-legacy roster and matching `PRG-DATA` manifest, and creates a complete rollback
-copy under `recovery-backups`. It does not edit native UserStorage objects.
-
-## Optional patches
-
-For rapid testing, **Spartacus Legends - One-hit fight debug cheat (optional)**
-can be enabled in RPCS3's patch manager. It makes the player invulnerable and
-ends offline fights with the first damaging hit. Disable it for normal play;
-after changing its state, remove the game's PPU cache and cold-boot once.
-
-**Spartacus Legends - Skip startup logo screens (optional)** skips the four
-publisher/developer video screens while retaining the legal notices and the
-game's normal title transition. Enable it in RPCS3's patch manager if desired;
-after changing its state, remove the game's PPU cache and cold-boot once.
-
-**Spartacus Legends - Online matchmaking compatibility (experimental)** enables
-RPCN matchmaking for user testing. It has completed repeated Ready Room and
-Quickmatch games between two RPCN accounts, including fighter exchange, combat,
-correct post-match results, return to the menu, and leaderboard updates. It is
-still optional while cancellation, disconnect, and wider network conditions are
-tested. Both players must use the same NPUB30746 build, enable this patch,
-clear the
-game's PPU cache, and cold-boot. Normal RPCN accounts are used; do not share
-credentials. If a match fails, report which client hosted, the queue type, and
-both RPCS3 logs.
-
-## v0.6.5 release notes
-
-This patch release fixes v1.06 consumable boost refills. Every purchasable
-boost pack now restores five uses, matching the retail catalog. Uses are
-decremented one at a time after fights and persist across cold boots. The fix
-was live-validated with Fame Boost: two packs restored 10 uses, one fight left
-9, and a cold boot restored 9.
-
-Close RPCS3 before replacing the server files, keep the existing `data`
-directory, and extract the release ZIP into a permanent folder.
-
-## v0.6.4 release notes
-
-This hotfix completes the oversized Shop method-8 transport correction begun
-in v0.6.3. Although v0.6.3 split large replies into multiple acknowledged
-packets, it sent them on the ordinary response stream. The client could ACK the
-packets without applying the complete transaction list, causing purchased
-gladiator slots to disappear after a cold boot and allowing the recruitment
-shop refresh loop to return.
-
-Fragmented RMC replies now use the title's legacy Quazal reliable substream:
-`RELIABLE | NEED_ACK`, a connection-local sequence counter beginning at `1`,
-963-byte logical fragments, ascending intermediate fragment IDs, final ID `0`,
-and independent compression framing and RC4 encryption for each packet.
-Replies below the fragmentation threshold remain byte-compatible with prior
-working releases.
-
-The affected save was validated across two cold boots using an isolated copy.
-The first boot applied the fragmented server time and eliminated repeated shop
-refreshes. After slot products `80002` through `80007` were purchased into that
-test copy, the second boot replayed all six records in a 1,290-byte response,
-reset the reliable sequence to `1, 2`, and restored every purchased slot with
-the correct recruitment timer.
-
-No save migration is required. Close RPCS3, replace the v0.6.3 server files
-with v0.6.4, and retain the existing `data` directory.
-
-## v0.6.3 release notes
-
-This hotfix restores startup for profiles with large persisted purchase
-histories. v0.6.2 could encode Shop method 8 into a single PRUDP datagram larger
-than the title's supported payload, so the client acknowledged the transport
-packet but never completed the RMC call. Campaign and roster enumeration then
-never began, appearing as missing save data or an endlessly loading campaign
-menu.
-
-The server now fragments oversized RMC responses into 962-byte logical pieces,
-numbers intermediate fragments from `1`, marks the final fragment with `0`, and
-advances the packet sequence for every piece. The exact affected 73- and
-97-transaction response sizes are covered by regression tests. A live test with
-an affected user's isolated save acknowledged both fragments, continued through
-campaign and roster enumeration, and restored the complete save successfully.
-
-No save migration is required. Replace the v0.6.2 server files with v0.6.3 while
-RPCS3 is closed and keep the existing `data` directory. As with every release,
-extract the ZIP into a permanent folder before running it; do not launch the
-server from inside the ZIP or a Windows temporary directory.
-
-## v0.6.2 release notes
-
-This patch release adds the live-validated v1.06 Daily Login and Shop fidelity
-work. Method 8 now restores persisted permanent purchases and consumable
-remaining-use counts across cold boots; method 9 consumes one use and persists
-the result. v1.06 Boost pages receive their ordinary retail price metadata for
-all requested Boost IDs `60000`–`60023`, while method 8 remains authoritative
-for ownership and quantities. The live-validated seven-stage Daily Login
-service is enabled automatically during normal startup. To disable it for
-troubleshooting, start the server with:
-
-```powershell
-SpartacusLegendsServer.exe --no-daily-login-rewards
-```
-
-Its reward schedule and claims persist atomically.
-
-## What the server runs
-
-- TCP 80: Ubisoft OnlineConfigService replacement
-- UDP 21000: Quazal authentication/TicketGranting
-- UDP 21001: Quazal secure connection and title services
-
-All listeners bind to `127.0.0.1` by default. Logs are written to the `logs`
-folder beside the executable. Normal startup does not connect to RPCS3 IPC.
-Port `28012` is used only when `--legacy-roster-bridge` or a recovery operation
-is explicitly requested.
-
-Researchers running multiple RPCS3 clients through a LAN address can start the
-server with `--host 0.0.0.0 --advertise-host <server-LAN-IP>`. The advertised
-address is placed in both the OnlineConfig response and the Quazal auth redirect;
-using only `--host` leaves clients redirected to loopback. Ordinary single-client
-setups should keep the default loopback configuration.
-
-RPCS3's **Bind address** and `<server-LAN-IP>` are not interchangeable. The
-bind address is the source address RPCS3 uses; `--advertise-host` must name the
-server address that source can reach. For example, the two-client test setup
-used RPCS3 bind/source `192.168.1.10` and server address `192.168.0.153`:
-
-```powershell
-SpartacusLegendsServer.exe --host 0.0.0.0 --advertise-host 192.168.0.153
-```
-
-Advertising `192.168.1.10` in that setup made the client repeat its initial
-Quazal SYN until login timed out. This distinction matters only when an
-explicit RPCS3 bind address or multiple clients are in use.
+# Spartacus Legends Preservation Server
+
+A local preservation server and patch installer for the PS3 version of **Spartacus Legends** (`NPUB30746`) on RPCS3. It restores login, economy, shop, recruitment, and native server-side save persistence so you can play the single-player game locally.
+
+- **Download:** [Latest Release](https://github.com/DeprivedPeasant/SpartacusLegends-Preservation/releases/latest)
+- **Community & Support:** [Join the Discord](https://discord.gg/TgJ6n9qDHG) for updates, help, and bug reports
+
+> No game files or copyrighted content are included.
+
+---
+
+## Requirements
+
+Before you start, make sure you have:
+
+1. **Spartacus Legends (USA — `NPUB30746`)** installed in RPCS3, version **`01.00`** or **`01.06`** (check the **Version** column in RPCS3). Other regions and versions are not supported.
+2. **An RPCN account** signed in through RPCS3 under **Manage > RPCN > RPCN Account**.
+3. **RPCS3 closed** while running setup (RPCS3 overwrites its config files when it exits).
+
+---
+
+## Installation & Setup
+
+### 1. Download and extract
+
+1. Download the latest ZIP from [Releases](https://github.com/DeprivedPeasant/SpartacusLegends-Preservation/releases/latest).
+2. Extract the entire ZIP to a permanent folder (for example, `C:\Games\SpartacusLegends-Preservation`).
+   - Do **not** run the app from inside the ZIP — Windows unpacks it to a temporary folder and will later delete your saves.
+   - Keep `SpartacusLegendsServerGUI.exe` in the same folder as `SpartacusLegendsServerGUI_runtime`.
+
+> [!NOTE]
+> The executables are unsigned, so Windows SmartScreen may show **"Windows protected your PC"** on first launch. Click **More info > Run anyway**. Some antivirus tools may also flag packaged Python apps as a false positive; each release includes a SHA-256 checksum if you want to verify the download.
+
+### 2. Run Patch Setup
+
+1. Make sure **RPCS3 is closed**.
+2. Open **`SpartacusLegendsServerGUI.exe`**.
+   - Available in **English, Spanish, and Brazilian Portuguese** (follows your Windows language by default, or change it from the bottom-left menu).
+3. On the **Patch setup** page, select your RPCS3 folder (the folder containing `rpcs3.exe`).
+4. Click **Install / repair setup**.
+5. Confirm every item in the checklist reads **OK**. If you see a **WARNING** (such as an unsupported game version or missing RPCN account), fix it before continuing.
+
+> Re-run **Patch setup** anytime you install or remove the `01.06` game update.
+
+### 3. Start the server and play
+
+1. Open the **Server** page in the app and click **Start server**. Wait until the status reads **Ready** and leave the app open while you play.
+2. Launch RPCS3 and boot *Spartacus Legends* normally (do **not** resume a savestate).
+3. Log in as usual. The app status will switch to **Game connected** and show when your save loads and updates.
+
+### 4. Closing the game safely
+
+When you finish playing:
+
+1. Return to the **Ludus** and wait about **20 seconds** for the game's autosave to finish.
+2. Close **RPCS3**.
+3. Click **Stop server** in the app.
+
+---
+
+## Features in the App
+
+- **Server:** Start/stop the server and view plain-language save, load, and connection activity.
+- **Player:** Edit gold, silver, and fame. Gold and silver can be edited while playing (applied after your next fight or shop purchase); on `01.00`, fame must be edited with the server stopped. Every offline edit creates a backup in `data\backups`.
+- **Items:** View and edit owned items, Boost uses *(live edits are experimental)*, and purchased Ludus slots.
+- **Patch setup:** Automatically configures RPCS3 patches, network settings, PPU cache clearing, and game version detection. Includes experimental adaptive patching if your executable is a different dump.
+
+---
+
+## Optional Enhancements
+
+### 60 FPS Mode
+
+Spartacus Legends runs cleanly at 60 FPS in RPCS3 without modifying the game:
+
+1. Right-click the game in RPCS3 → **Change Custom Configuration**.
+2. Set **Advanced > VBlank Frequency** to **120 Hz**.
+3. Leave **GPU > Frame limit** on **Auto**.
+
+*(Leave VBlank Frequency at 60 Hz for the original 30 FPS presentation if your PC can't hold 60 FPS.)*
+
+### Optional Patches
+
+You can toggle these in RPCS3 under **Manage > Game Patches** (after toggling any patch, right-click the game → **Remove > PPU Cache** and cold-boot):
+
+- **Skip startup logo screens** — Skips the intro publisher/developer videos.
+- **One-hit fight debug cheat** — Makes you invulnerable and ends offline fights in one hit (for testing).
+- **Online matchmaking compatibility (experimental)** — Enables RPCN matchmaking between two players on the same version (`01.00` or `01.06`).
+
+---
+
+## Saves, Backups & Updating
+
+- Your server-side saves are stored in the **`data\`** folder next to the app (`01.00` and `01.06` saves are kept separate).
+- **To back up your progress:** Close RPCS3 and the server, then copy both the server's `data\` folder and your RPCS3 save folder (`PRG-DATA`).
+- **To update to a new release:** Close RPCS3 and the server, extract the new release to a folder, and copy your existing `data\` folder into it.
+- **Migrating a `01.00` save to `01.06`:** See [MIGRATION_GUIDE.md](MIGRATION_GUIDE.md).
+
+---
 
 ## Troubleshooting
 
-**Check the setup first.** These two commands answer most questions before you
-report a problem:
+**The game says the service is unavailable**
+- Make sure the app's Server page says **Ready** before booting the game.
+- Check **Patch setup** and make sure all items are **OK** (and that RPCS3 was closed when you ran setup).
+
+**A port is already in use (TCP 80, UDP 21000, or UDP 21001)**
+- Make sure another copy of the server isn't already running.
+- Port 80 can also be held by another local web server or Windows HTTP service. Run `netstat -ano | findstr ":80 "` in PowerShell to find the PID using it.
+
+**Progress didn't save / version mismatch error**
+- If you updated or downgraded between `01.00` and `01.06`, close RPCS3, stop the server, and run **Patch setup** again so the server matches your installed game version.
+
+**Saves disappeared between sessions**
+- Make sure you extracted the ZIP to a permanent folder and aren't running the app from inside the archive or a temporary directory.
+
+**Windows "Low integrity" warning**
+- Move the extracted folder to a normal location like `C:\Games\` or your Desktop and run it from there.
+
+Still stuck? Join the [Discord](https://discord.gg/TgJ6n9qDHG) and share the files from your `logs\` folder along with `RPCS3.log`.
+
+---
+
+## Advanced
+
+<details>
+<summary>Manual RPCS3 setup (if automatic Patch setup can't find RPCS3)</summary>
+
+1. Copy `SpartacusLegends_ServerPatch.yml` into `<RPCS3 folder>\patches\imported_patch.yml`.
+   - If `imported_patch.yml` already exists, do **not** overwrite it — append the `PPU-81471d050c14f4d20b4027686f8b571dafd32394` (`01.00`) and/or `PPU-131aece6ae8526d13307be925f48c87f73c43799` (`01.06`) sections beneath its existing `Version: 1.2` header.
+2. Open RPCS3 → **Manage > Game Patches**, enable **Spartacus Legends - Server emulator compatibility** for your version, and click **Save**.
+3. Right-click the game → **Change Custom Configuration** → **Network**:
+   - **Network Status:** `Connected`
+   - **PSN Status:** `RPCN`
+   - **IP swap list:** `onlineconfigservice.ubi.com=127.0.0.1`
+4. Right-click the game → **Remove > PPU Cache**.
+
+</details>
+
+<details>
+<summary>Console tools & command-line options</summary>
+
+`SpartacusLegendsServer.exe` and `SpartacusLegendsPatchInstaller.exe` are included for scripted or advanced use (English only). Do not run the console server at the same time as the GUI server.
 
 ```powershell
-SpartacusLegendsPatchInstaller.exe "C:\path\to\RPCS3" --verify
-SpartacusLegendsServer.exe --check
+# Verify RPCS3 setup without modifying anything
+.\SpartacusLegendsPatchInstaller.exe "C:\path\to\RPCS3" --verify
+
+# Test required ports (TCP 80, UDP 21000, UDP 21001) without starting the server
+.\SpartacusLegendsServer.exe --check
+
+# Start the console server directly (skip GUI prompt)
+.\SpartacusLegendsServer.exe --console
+
+# Explicitly select a game version or disable daily login rewards
+.\SpartacusLegendsServer.exe --title-version 01.06
+.\SpartacusLegendsServer.exe --no-daily-login-rewards
+
+# Listen on LAN for multi-client setups
+.\SpartacusLegendsServer.exe --host 0.0.0.0 --advertise-host <server-LAN-IP>
 ```
 
-The first re-reads RPCS3's own configuration and reports each requirement; the
-second tests the three ports and exits without starting the server.
+</details>
 
-**A port is unavailable.** Only one preservation server may run at a time. TCP
-80 is also taken by web servers and by Windows' own HTTP service. Find the
-program holding it:
+<details>
+<summary>Running and building from source</summary>
 
-```powershell
-netstat -ano | findstr ":80 "
-```
-
-Then identify the process ID that command prints:
-
-```powershell
-tasklist /FI "PID eq <the number>"
-```
-
-**RPCS3 shows the service-unavailable dialog.** Verify the IP swap spelling,
-that the server window reported all services ready, and that the compatibility
-patch is enabled for NPUB30746 at your installed version. Confirm the booted
-game's `PPU executable hash:` line in RPCS3's log matches
-`81471d050c14f4d20b4027686f8b571dafd32394` (01.00) or
-`131aece6ae8526d13307be925f48c87f73c43799` (01.06).
-
-**The setup worked once and then stopped.** If RPCS3 was open while the
-installer ran, RPCS3 overwrote the changes when it closed. Close RPCS3 and run
-the installer again.
-
-**Profile, roster, or campaign progress does not return.** Check that the three
-files beneath `data\usercontent` exist at the exact sizes listed above. Inspect
-`logs\online_config.log` for successful `PUT` entries when saving and `GET`
-entries during the next login. RPCS3 IPC and PINE are not involved in normal
-v0.4 persistence.
-
-**The server says "Progress NOT saved: the game is version 01.06 but the
-server is set to 01.00" (or the reverse).** The game was updated or downgraded
-without the server's version following it. Close RPCS3, stop the server, and
-run Patch setup again (or start the server with `--title-version`). Each version
-keeps its saves in its own folder: 01.00 in `data\usercontent`, 01.06 in
-`data\usercontent\01.06`. Since v0.7.1 the server refuses the other version's
-saves instead of storing them in the wrong folder; before that, a save stored
-there blocks every later upload until it is moved into its own version's
-folder.
-
-**The server says "The game version is not set".** Patch setup records your
-game version in `data\server-config.json`. Without that file the server uses
-the version your existing saves belong to; on a fresh folder, or when the saves
-do not settle it, it will not start rather than guess. Run Patch setup, or start
-the server with `--title-version 01.00` or `--title-version 01.06`. The app
-reads the version from your RPCS3 folder when you press Start, and offers to
-switch if the game has been updated.
-
-**A v0.3.x roster or campaign is missing after upgrading.** Normal v0.4 startup
-does not import `roster.json` or `campaign.json`. Restore your backed-up folder
-and follow the upgrade warning above; do not allow a new fallback roster to
-replace your only legacy copy.
-
-**Progress disappears between sessions.** Check that the server window is not
-reporting that it is running from a temporary folder. If it is, close it,
-extract the ZIP properly, and run the extracted copy.
-
-## Running from source
-
-Python 3.10 or newer is sufficient for the console server; there are no
-third-party runtime dependencies:
+Requires Python 3.10+. The console server has no third-party dependencies:
 
 ```powershell
 python tools\spartacus_server.py
 ```
 
-The optional Qt frontend needs PySide6 and runs with:
+For the Qt GUI:
 
 ```powershell
 python -m pip install "PySide6>=6.7,<7"
 python tools\spartacus_gui.py
 ```
 
-Interface text is translated by `tools\i18n.py` from the catalogues in
-`tools	ranslations\`, keyed by the English text. After changing or adding a
-message, update both catalogues and check them:
-
-```powershell
-python scripts\i18n_messages.py
-```
-
-The log files and the console programs stay English, so bug reports read the
-same whatever language a player uses.
-
-To build the standalone Windows release:
+To build the standalone Windows release ZIP:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File packaging\build_release.ps1
 ```
 
-The build script creates `dist\SpartacusLegends-Preservation-v<version>.zip`,
-where `<version>` is read from `tools\_version.py` (the single source of truth
-for the version).
+</details>
